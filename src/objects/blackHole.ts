@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Sky } from '../sky';
 import type { SimObject } from '../types';
+import { BLACK_HOLE_PRESETS } from '../data/presets';
 
 export function createBlackHole(sky: Sky): SimObject {
   const u = sky.uniforms;
@@ -9,6 +10,7 @@ export function createBlackHole(sky: Sky): SimObject {
     name: '黑洞',
     group: new THREE.Group(),
     skyMode: 'blackhole',
+    presets: BLACK_HOLE_PRESETS,
     camera: { distance: 26, min: 3, max: 70 },
     bloom: { strength: 0.5, radius: 0.5, threshold: 0.9 },
     params: [

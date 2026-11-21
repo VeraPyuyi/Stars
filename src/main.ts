@@ -6,7 +6,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import './style.css';
 import { Sky } from './sky';
-import type { Param, SimObject } from './types';
+import type { Param, Preset, SimObject } from './types';
 import { createStar } from './objects/star';
 import { createPlanet } from './objects/planet';
 import { createNeutronStar, createPulsar } from './objects/compact';
@@ -43,7 +43,7 @@ let current: SimObject = objects[0];
 // ---------- UI ----------
 const $ = (id: string) => document.getElementById(id)!;
 
-function renderParam(p: Param): HTMLElement {
+function renderParam(p: Param, onUser?: () => void): HTMLElement {
   const row = document.createElement('div');
   row.className = 'row';
   if (p.kind === 'range') {
@@ -60,6 +60,7 @@ function renderParam(p: Param): HTMLElement {
       p.value = Number(input.value);
       val.textContent = fmt(p.value);
       p.onChange(p.value);
+      onUser?.();
     });
     row.append(label, input);
   } else if (p.kind === 'select') {
@@ -67,7 +68,7 @@ function renderParam(p: Param): HTMLElement {
     label.textContent = p.label;
     const sel = document.createElement('select');
     for (const o of p.options) sel.add(new Option(o.label, o.value, false, o.value === p.value));
-    sel.addEventListener('change', () => { p.value = sel.value; p.onChange(p.value); });
+    sel.addEventListener('change', () => { p.value = sel.value; p.onChange(p.value); onUser?.(); });
     row.append(label, sel);
   } else {
     row.classList.add('toggle');
@@ -75,7 +76,7 @@ function renderParam(p: Param): HTMLElement {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = p.value;
-    cb.addEventListener('change', () => { p.value = cb.checked; p.onChange(p.value); });
+    cb.addEventListener('change', () => { p.value = cb.checked; p.onChange(p.value); onUser?.(); });
     label.append(cb, document.createTextNode(p.label));
     row.append(label);
   }
@@ -87,7 +88,64 @@ const exposure: Param = { kind: 'range', key: 'exposure', label: '曝光', min: 
 const bloomParam: Param = { kind: 'range', key: 'bloom', label: '辉光强度', min: 0, max: 2, step: 0.05, value: 0.6,
   onChange: (v) => (bloom.strength = v) };
 
-function select(obj: SimObject) {
+function applyPreset(obj: SimObject, preset: Preset) {
+  for (const p of obj.params) {
+    if (!(p.key in preset.values)) continue;
+    const v = preset.values[p.key];
+    p.value = v as never;
+    (p.onChange as (x: typeof v) => void)(v);
+  }
+  if (preset.view) {
+    const d = new THREE.Vector3(...preset.view).normalize();
+    camera.position.copy(d.multiplyScalar(camera.position.length()));
+    controls.target.set(0, 0, 0);
+  }
+}
+
+function renderFacts(preset: Preset | undefined): string {
+  if (!preset) return '';
+  const rows = preset.facts.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('');
+  return `<div class="facts"><div class="facts-title">${preset.name}</div><table>${rows}</table>` +
+    (preset.note ? `<p>${preset.note}</p>` : '') + '</div>';
+}
+
+function renderPanel(obj: SimObject, preset?: Preset) {
+  const params = $('params');
+  params.innerHTML = `<h2>${obj.name} · 参数</h2>`;
+  let presetSelect: HTMLSelectElement | undefined;
+  const facts = document.createElement('div');
+  if (obj.presets?.length) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const label = document.createElement('label');
+    label.textContent = '知名天体（真实数据）';
+    presetSelect = document.createElement('select');
+    presetSelect.add(new Option('自定义', ''));
+    for (const pr of obj.presets) presetSelect.add(new Option(pr.name, pr.id, false, pr.id === preset?.id));
+    presetSelect.addEventListener('change', () => {
+      const pr = obj.presets!.find((x) => x.id === presetSelect!.value);
+      if (pr) applyPreset(obj, pr);
+      renderPanel(obj, pr);
+    });
+    row.append(label, presetSelect);
+    params.append(row);
+    facts.innerHTML = renderFacts(preset);
+    params.append(facts);
+  }
+  // Touching any slider turns the selection back into a custom object.
+  const onUser = () => {
+    if (presetSelect && presetSelect.value) { presetSelect.value = ''; facts.innerHTML = ''; setHash(obj); }
+  };
+  obj.params.forEach((p) => params.append(renderParam(p, onUser)));
+  if (obj.extraUI) params.append(obj.extraUI());
+  setHash(obj, preset);
+}
+
+function setHash(obj: SimObject, preset?: Preset) {
+  history.replaceState(null, '', `#${obj.id}${preset ? '/' + preset.id : ''}`);
+}
+
+function select(obj: SimObject, presetId?: string) {
   scene.remove(current.group);
   current = obj;
   scene.add(obj.group);
@@ -106,14 +164,13 @@ function select(obj: SimObject) {
   bloomParam.value = obj.bloom.strength;
 
   document.querySelectorAll<HTMLButtonElement>('#objects button').forEach((b) => b.classList.toggle('active', b.dataset.id === obj.id));
-  const params = $('params');
-  params.innerHTML = `<h2>${obj.name} · 参数</h2>`;
-  obj.params.forEach((p) => params.append(renderParam(p)));
+  const preset = obj.presets?.find((p) => p.id === presetId);
+  if (preset) applyPreset(obj, preset);
+  renderPanel(obj, preset);
   const global = $('global');
   global.innerHTML = '<h2>画面</h2>';
   global.append(renderParam(exposure), renderParam(bloomParam));
   $('info').innerHTML = `<h2>物理说明</h2>${obj.info}`;
-  history.replaceState(null, '', `#${obj.id}`);
 }
 
 for (const obj of objects) {
@@ -125,7 +182,10 @@ for (const obj of objects) {
 }
 
 scene.add(current.group);
-select(objects.find((o) => `#${o.id}` === location.hash) ?? objects[0]);
+{
+  const [id, presetId] = location.hash.slice(1).split('/');
+  select(objects.find((o) => o.id === id) ?? objects[0], presetId);
+}
 
 // ---------- loop ----------
 window.addEventListener('resize', () => {
@@ -151,4 +211,4 @@ renderer.setAnimationLoop((now) => {
 });
 
 // Exposed for automated screenshots / debugging.
-(window as unknown as { __sim: unknown }).__sim = { camera, controls, select, objects };
+(window as unknown as { __sim: unknown }).__sim = { camera, controls, select, objects, renderer, bloom };
