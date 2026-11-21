@@ -4,7 +4,7 @@ import type { Sky } from '../sky';
 import type { SimObject } from '../types';
 import { TOUR_STOPS, displayedRotation, distanceAt, travelSeconds, type StopKind, type TourStop } from './stops';
 import {
-  centripetal, clamp01, drift, frameOf, isSolar, layoutRoute, restEye, smoothstep, updateOrbits,
+  centripetal, clamp01, drift, frameOf, isSolar, layoutRoute, restEye, smoothstep,
   type KindFrame, type Placement,
 } from './route';
 import { createDust } from './dust';
@@ -56,7 +56,7 @@ export function applyValues(obj: SimObject, values: Record<string, number | stri
  * (integers are the stops). The wheel moves the target progress freely, so the
  * flight can be stopped half-way or reversed; the camera follows it with a speed
  * limit set by the real distance of each leg, so a long leg always takes longer.
- * Between stops the camera flies a Catmull–Rom curve, looks ahead, banks a little.
+ * The camera flies one smooth curve past all the objects and turns to the next one ahead.
  */
 export class Tour {
   readonly stops: TourStop[] = TOUR_STOPS;
@@ -82,20 +82,12 @@ export class Tour {
   private arriveQuat = new THREE.Quaternion();
   private arriveBlend = 0;
   private wantQuat = new THREE.Quaternion();
-  private lookQ = new THREE.Quaternion();
   private shownQuat = new THREE.Quaternion();
   private e0 = new THREE.Vector3();
   private e1 = new THREE.Vector3();
   private e2 = new THREE.Vector3();
   private e3 = new THREE.Vector3();
-  private turnLeg = '';
-  private lastYaw = 0;
   private lookM = new THREE.Matrix4();
-  /** Pointer position (−1…1) for a gentle parallax at rest, smoothed, and the offset applied. */
-  private pointer = new THREE.Vector2();
-  private pointerSmooth = new THREE.Vector2();
-  private parallax = new THREE.Vector3();
-  private lastCenter = new THREE.Vector3();
   private nearest = -1;
   private resting = true;
   private anchor: Anchor | null = null;
@@ -193,17 +185,6 @@ export class Tour {
     return this.tmp3.subVectors(this.placements[from].center, this.placements[i].center);
   }
 
-  /** Turn the Sun's resting view towards `from` (keeping the preset's height above the plane). */
-  private faceSun(from: THREE.Vector3) {
-    const S = this.placements[this.sun];
-    const el = Math.asin(THREE.MathUtils.clamp(S.view.y, -1, 1));
-    const az = Math.atan2(from.x - S.center.x, from.z - S.center.z) + 0.35;
-    S.view.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
-  }
-
-  /** Pointer position over the canvas, −1…1, for a slight parallax at rest. */
-  setPointer(x: number, y: number) { this.pointer.set(x, y); }
-
   get aspect() { return this.camera.aspect; }
   get last() { return this.stops.length - 1; }
   /** True while the camera is away from a stop (flying, or paused between two). */
@@ -228,8 +209,6 @@ export class Tour {
     this.index = i;
     this.leg = '';
     this.speed = 0;
-    this.lastCenter.copy(this.placements[i].center);
-    this.parallax.set(0, 0, 0);
     // Arrive with the flight's pose and ease into the resting one (no snap of roll or aim).
     this.arriveQuat.copy(this.camera.quaternion);
     this.arriveBlend = 1;
@@ -321,8 +300,6 @@ export class Tour {
       this.camera.quaternion.copy(this.shownQuat);
       this.arriveBlend = 0;
       const c = this.placements[this.index].center;
-      this.camera.position.sub(this.parallax);
-      this.parallax.set(0, 0, 0);
       this.anchor = {
         index: this.index,
         eye: this.camera.position.clone().sub(c),
@@ -355,23 +332,9 @@ export class Tour {
     this.progress = THREE.MathUtils.clamp(this.progress, 0, this.last);
   }
 
-  /** Undo last frame's parallax offset, before OrbitControls reads the camera. */
-  unparallax() {
-    this.camera.position.sub(this.parallax);
-    this.parallax.set(0, 0, 0);
-  }
 
   update(dt: number, time: number) {
     const cam = this.camera;
-    updateOrbits(this.stops, this.placements, time);
-    if (this.resting) {
-      // Ride along with a planet on its orbit (before leaving, so the flight starts from here).
-      const c = this.placements[this.index].center;
-      this.tmp.subVectors(c, this.lastCenter);
-      cam.position.add(this.tmp);
-      this.controls.target.add(this.tmp);
-      this.lastCenter.copy(c);
-    }
     this.advance(dt);
 
     if (!this.resting) {
@@ -381,20 +344,12 @@ export class Tour {
       const A = this.placements[i], B = this.placements[i + 1];
       const anchorA = this.anchor?.index === i ? this.anchor : null;
       const anchorB = this.anchor?.index === i + 1 ? this.anchor : null;
-      // The Sun is left from the side of the planet the flight is heading to.
-      if (t > 0 && i === this.sun) this.faceSun(B.center);
       // One smooth curve through all the resting eyes (centripetal Catmull–Rom), so the
       // camera can fly straight past a stop without a kink; the ends pull away from the objects.
       const e0 = i > 0 ? this.eyeAt(i - 1, this.e0) : this.e0.copy(A.center);
       const e1 = this.eyeAt(i, this.e1), e2 = this.eyeAt(i + 1, this.e2);
       const e3 = i + 2 <= this.last ? this.eyeAt(i + 2, this.e3) : this.e3.copy(B.center);
       centripetal(e0, e1, e2, e3, t, cam.position);
-      // Inside the solar system, fly over the Sun rather than through it.
-      if (i + 1 <= this.lastSolar && i !== this.sun && i + 1 !== this.sun) {
-        const S = this.placements[this.sun].center;
-        const h = Math.hypot(cam.position.x - S.x, cam.position.z - S.z);
-        cam.position.y += 4.5 * Math.exp(-((h / 4) ** 2));
-      }
       // Never pass through either object: inside twice the safety radius R the distance d is
       // eased to R + d²/4R (smooth, and the identity outside), so the path bends round it.
       for (const k of [i, i + 1]) {
@@ -403,34 +358,18 @@ export class Tour {
         const d = v.length();
         if (d < 2 * R) cam.position.copy(this.placements[k].center).addScaledVector(v.normalize(), R + (d * d) / (4 * R));
       }
-      // Look at the object being passed, then turn towards where the flight is heading.
-      // The turn interpolates yaw and pitch and stays continuous past ±180°.
+      // Look at the object until it is passed, then turn smoothly to the next one ahead
+      // (the camera is off to the side of the route, so the point looked at never comes near it).
       const ahead = this.target >= p;
-      const look = ahead ? smoothstep(clamp01((t - 0.03) / 0.6)) : 1 - smoothstep(clamp01((0.97 - t) / 0.6));
+      const look = ahead ? smoothstep(clamp01(t / 0.35)) : 1 - smoothstep(clamp01((1 - t) / 0.35));
       const targetA = anchorA ? A.center.clone().add(anchorA.target) : A.center;
       const targetB = anchorB ? B.center.clone().add(anchorB.target) : B.center;
-      const dA = this.tmp.subVectors(targetA, cam.position).normalize();
-      const dB = this.tmp2.subVectors(targetB, cam.position).normalize();
-      const yawA = Math.atan2(dA.x, dA.z), yawB = Math.atan2(dB.x, dB.z);
-      let dyaw = Math.atan2(Math.sin(yawB - yawA), Math.cos(yawB - yawA));
-      const legId = `${i}:${ahead}`;
-      // Unwrap against last frame's value, so the turn stays continuous past ±180°.
-      if (legId !== this.turnLeg) this.turnLeg = legId;
-      else dyaw += 2 * Math.PI * Math.round((this.lastYaw - dyaw) / (2 * Math.PI));
-      this.lastYaw = dyaw;
-      const yaw = yawA + dyaw * look;
-      const pitch = Math.asin(THREE.MathUtils.clamp(dA.y, -1, 1)) * (1 - look) + Math.asin(THREE.MathUtils.clamp(dB.y, -1, 1)) * look;
-      const dir = this.tmp3.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
-      this.wantQuat.setFromRotationMatrix(this.lookM.lookAt(cam.position, dir.add(cam.position), this.tmp.set(0, 1, 0)));
-      // Bank gently while turning towards the next object.
-      const turn = Math.sign(B.center.x - A.center.x) || 1;
-      const bank = Math.sin(Math.PI * t) * 0.07 * turn;
-      this.wantQuat.multiply(this.lookQ.setFromAxisAngle(this.tmp2.set(0, 0, 1), -bank));
-      // The camera turns with a little lag, like a hand-held one, never instantly.
-      // Its turn rate is also capped, so passing close by a small planet never whips it round.
+      const target = this.tmp2.lerpVectors(targetA, targetB, look);
+      this.wantQuat.setFromRotationMatrix(this.lookM.lookAt(cam.position, target, this.tmp.set(0, 1, 0)));
+      // The camera turns with a little lag and a capped rate, never with a jerk.
       const gapAngle = cam.quaternion.angleTo(this.wantQuat);
       if (gapAngle > 1e-6) {
-        const step = Math.min(gapAngle * (1 - Math.exp(-dt * 5)), 1.6 * dt);
+        const step = Math.min(gapAngle * (1 - Math.exp(-dt * 4)), 1.4 * dt);
         cam.quaternion.slerp(this.wantQuat, step / gapAngle);
       }
       cam.up.set(0, 1, 0);
@@ -462,14 +401,6 @@ export class Tour {
         this.wantQuat.copy(cam.quaternion);
         cam.quaternion.copy(this.arriveQuat).slerp(this.wantQuat, 1 - k);
       }
-      // Slight parallax with the pointer: the object shifts against the distant stars.
-      this.pointerSmooth.lerp(this.pointer, 1 - Math.exp(-dt * 2.5));
-      const dist = cam.position.distanceTo(this.controls.target);
-      const right = this.tmp.set(1, 0, 0).applyQuaternion(cam.quaternion);
-      const upv = this.tmp2.set(0, 1, 0).applyQuaternion(cam.quaternion);
-      this.parallax.copy(right).multiplyScalar(this.pointerSmooth.x * dist * 0.025)
-        .addScaledVector(upv, -this.pointerSmooth.y * dist * 0.018);
-      cam.position.add(this.parallax);
     }
 
     // Speed streaks of interstellar dust while flying (not inside the solar system).
@@ -532,7 +463,6 @@ export class Tour {
     this.sky.uniforms.uHolePos.value.set(0, 0, 0);
     this.sky.uniforms.uMode.value = 0;
     this.activeHole = -1;
-    this.unparallax();
     // Come back to the nearest stop next time.
     this.place(Math.round(this.progress));
     this.controls.enabled = true;

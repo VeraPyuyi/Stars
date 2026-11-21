@@ -321,12 +321,6 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowDown') holdDir = -1;
   else if (e.key === ' ') { e.preventDefault(); tourUI?.el.querySelector<HTMLButtonElement>('[data-a=auto]')?.click(); }
 });
-// A slight parallax follows the pointer while resting at a stop.
-canvas.addEventListener('pointermove', (e) => {
-  if (e.pointerType !== 'mouse' || e.buttons) return;
-  tour?.setPointer((e.clientX / innerWidth) * 2 - 1, (e.clientY / innerHeight) * 2 - 1);
-});
-canvas.addEventListener('pointerleave', () => tour?.setPointer(0, 0));
 // Clicking an object (a click, not a drag) shows its details.
 {
   let down: { x: number; y: number; t: number } | null = null;
@@ -369,7 +363,6 @@ renderer.setAnimationLoop((now) => {
   const t = timer.getElapsed();
   if (mode === 'tour' && tour) {
     if (holdDir) tour.nudge(holdDir * dt * 0.6, 0.12);
-    tour.unparallax();
     if (!tour.moving) controls.update();
     tour.update(dt, t);
   } else {

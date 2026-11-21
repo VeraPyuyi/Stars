@@ -1,12 +1,12 @@
 import * as THREE from 'three';
-import { orbitRadius, orbitSeconds } from '../objects/asteroidBelt';
+import { orbitRadius } from '../objects/asteroidBelt';
 import type { StopKind, TourStop } from './stops';
 
 /**
  * Where each stop hangs in space and where the camera rests to look at it.
  * Positions are not to scale: the gap between two stops grows with the log of the
- * real distance between them, and the route zig-zags so the camera never has to
- * fly through an object to reach the next one.
+ * real distance between them. The route is nearly straight, outwards from the Sun,
+ * and every object is passed on the same side, so the camera never has to wind round one.
  */
 export interface KindFrame {
   /** Rough visual radius (glow, beam, disk), used for spacing. */
@@ -41,77 +41,55 @@ export interface Placement {
 
 const UP = new THREE.Vector3(0, 1, 0);
 
-/** Starting angle of each body on its orbit: staggered so the route spirals outwards. */
-const PHASE0 = -3.95, PHASE_STEP = 0.35;
-
 /** Inside the solar system: the Sun and everything orbiting it. */
 export const isSolar = (s: TourStop) => !!s.orbit || s.id === 'sun';
 
+/** Direction of the route out of the Sun (in the plane of the planets). */
+const OUT = new THREE.Vector3(Math.cos(-1.0), 0, Math.sin(-1.0));
+
 /**
- * Sun at the origin, planets (and the belt) on circular orbits around it in the xz
- * plane; the interstellar stops are chained from there, the first one well above the
- * plane of the planets so that no flight out of the solar system crosses the Sun.
+ * The Sun at the origin and the planets (and the belt) on their orbits, lined up
+ * along one direction out of the Sun, then the interstellar stops further out along
+ * the same direction, with only a gentle drift up/down and sideways. The camera
+ * rests a little before each object and off to its right, so flying on it simply
+ * passes the object on its right-hand side and carries on straight ahead.
  */
 export function layoutRoute(stops: TourStop[]): Placement[] {
-  const placements: Placement[] = stops.map(() => ({ center: new THREE.Vector3(), view: new THREE.Vector3(0, 0.22, 1).normalize() }));
-  let prev: TourStop | null = null;
-  let k = 0;
+  const centers = stops.map(() => new THREE.Vector3());
+  const side0 = new THREE.Vector3().crossVectors(OUT, UP).normalize();
+  let k = 0, prev: TourStop | null = null, last = new THREE.Vector3();
   stops.forEach((s, i) => {
-    if (isSolar(s)) return;
-    const from = prev ? placements[stops.indexOf(prev)].center : new THREE.Vector3();
-    const gap = (prev ? 40 + KIND_FRAME[prev.kind].extent : 130) + KIND_FRAME[s.kind].extent
-      + 30 * Math.log10(1 + Math.abs(s.ly - (prev?.ly ?? 0)));
-    const side = k % 2 === 0 ? 1 : -1;
-    const lift = prev ? ((((k * 37) % 7) - 3) / 3) * 0.12 : 0.45;
-    placements[i].center.copy(from).add(new THREE.Vector3(side * 0.45 * gap, lift * gap, -gap));
+    if (s.orbit) {
+      // A few degrees apart from one another, so each planet is not hidden behind the last.
+      const a = (k++ % 2 === 0 ? 1 : -1) * 0.025;
+      centers[i].copy(OUT).applyAxisAngle(UP, a).multiplyScalar(orbitRadius(s.orbit.au));
+    } else if (s.id !== 'sun') {
+      const p: TourStop = prev ?? s;
+      const first = !prev || isSolar(p);
+      const gap = (first ? 110 : 40 + KIND_FRAME[p.kind].extent) + KIND_FRAME[s.kind].extent
+        + 30 * Math.log10(1 + Math.abs(s.ly - (first ? 0 : p.ly)));
+      const n = i * 1.7;
+      const dir = OUT.clone().addScaledVector(side0, 0.12 * Math.sin(n)).addScaledVector(UP, 0.08 * Math.sin(n * 0.6 + 1)).normalize();
+      centers[i].copy(last).addScaledVector(dir, gap);
+    }
+    last = centers[i];
     prev = s;
-    k++;
   });
-  stops.forEach((stop, i) => {
-    if (stop.orbit) return; // set every frame by updateOrbits
-    const center = placements[i].center;
-    let side = 1;
-    if (stop.id !== 'sun') {
-      const next = placements[i + 1]?.center ?? center.clone().add(center.clone().sub(placements[i - 1].center));
-      side = Math.sign(next.x - center.x) || 1;
-    }
-    // The preset's line of sight keeps its inclination to the spin axis (+y);
-    // it is only turned about +y towards the side the route leaves from.
-    const base = stop.preset.view ? new THREE.Vector3(...stop.preset.view).normalize() : new THREE.Vector3(0, 0.22, 1).normalize();
-    placements[i].view.copy(base.applyAxisAngle(UP, side * 0.7));
-    // A pole-on view (Vega) is kept no steeper than 60°: looking straight down while
-    // flying past would leave the camera's heading undefined and spin it round.
-    const v = placements[i].view, maxY = Math.sin(THREE.MathUtils.degToRad(60));
-    if (Math.abs(v.y) > maxY) {
-      const h = Math.hypot(v.x, v.z) || 1;
-      const k = Math.cos(THREE.MathUtils.degToRad(60)) / h;
-      v.set(v.x * k || Math.cos(THREE.MathUtils.degToRad(60)), Math.sign(v.y) * maxY, v.z * k);
-    }
-  });
-  updateOrbits(stops, placements, 0);
-  return placements;
-}
-
-/** Move the orbiting stops to where they are at `time` (seconds of display time). */
-export function updateOrbits(stops: TourStop[], placements: Placement[], time: number) {
-  let k = 0;
-  stops.forEach((s, i) => {
-    if (!s.orbit) return;
-    const R = orbitRadius(s.orbit.au);
-    const th = PHASE0 + k * PHASE_STEP + (time * 2 * Math.PI) / orbitSeconds(s.orbit.au);
-    const out = new THREE.Vector3(Math.cos(th), 0, Math.sin(th));
-    const along = new THREE.Vector3(-Math.sin(th), 0, Math.cos(th));
-    placements[i].center.copy(out).multiplyScalar(R);
-    if (s.kind === 'belt') {
-      // From just outside the belt and a little behind, looking along it towards the Sun's side.
-      placements[i].view.copy(out).multiplyScalar(0.55).addScaledVector(along, -0.8).addScaledVector(UP, 0.32).normalize();
-    } else {
-      // From the side (along the orbit), a little towards the Sun: half of the planet is lit and the
-      // route, which runs outwards, passes beside the planet rather than through it.
-      const side = k % 2 === 0 ? 1 : -1;
-      placements[i].view.copy(out).multiplyScalar(-0.2).addScaledVector(along, side).addScaledVector(UP, 0.3).normalize();
-    }
-    k++;
+  return stops.map((stop, i) => {
+    // Direction of travel at this stop, flattened onto the plane of the route.
+    const ahead = (centers[i + 1] ?? centers[i].clone().addScaledVector(OUT, 1)).clone().sub(centers[i - 1] ?? centers[i].clone().addScaledVector(OUT, -1));
+    ahead.y = 0;
+    ahead.normalize();
+    const right = new THREE.Vector3().crossVectors(ahead, UP).normalize();
+    // Horizontal direction of the resting eye: mostly to the right, a little behind.
+    const h = right.multiplyScalar(0.88).addScaledVector(ahead, -0.48).normalize();
+    // Height above the object's equator: the preset's inclination where it matters (the
+    // disc of a black hole, a pulsar's spin axis, Vega seen pole-on), limited to 60°.
+    const presetEl = stop.preset.view ? Math.asin(new THREE.Vector3(...stop.preset.view).normalize().y) : null;
+    const ringed = stop.preset.values.type === 'saturn' || stop.preset.values.type === 'gas';
+    const el = THREE.MathUtils.clamp(presetEl ?? THREE.MathUtils.degToRad(stop.kind === 'belt' || ringed ? 24 : 12), -Math.PI / 3, Math.PI / 3);
+    const view = h.multiplyScalar(Math.cos(el)).addScaledVector(UP, Math.sin(el)).normalize();
+    return { center: centers[i], view };
   });
 }
 
