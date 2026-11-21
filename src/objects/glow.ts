@@ -31,13 +31,15 @@ export class Glow {
         void main(){
           vec2 p = (vUv * 2.0 - 1.0) * uSize;   // in units of the sphere radius
           float r = length(p);
-          if (r < 0.98) discard;
+          if (r < 1.0) discard;
           float a = atan(p.y, p.x);
           float streak = fbm(vec3(cos(a) * 4.0, sin(a) * 4.0, uTime * 0.05 + r * 0.15), 4);
-          float inner = exp(-(r - 1.0) * 6.0);
-          float outer = 0.35 / (r * r) * (1.0 + uStreaks * 0.8 * streak);
+          // Starts at about the limb-darkened edge brightness and only decreases outward,
+          // so the limb never looks outlined by a brighter ring.
+          float inner = 0.42 * exp(-(r - 1.0) * 5.0);
+          float outer = 0.35 / (r * r) * (1.0 + uStreaks * 0.8 * streak) * smoothstep(1.0, 1.6, r);
           float fade = 1.0 - smoothstep(uSize * 0.6, uSize, r);
-          vec3 c = blackbody(uTemp) * (inner * 1.2 + outer) * fade * uIntensity;
+          vec3 c = blackbody(uTemp) * (inner + outer) * fade * uIntensity;
           gl_FragColor = vec4(c, 1.0);
         }
       `,

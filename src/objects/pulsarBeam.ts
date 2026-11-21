@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { NOISE } from '../shaders/common';
-import { pixelScale } from '../shared';
+import { pixelScale, volumeSamples } from '../shared';
 
 /**
- * Volumetric pulsar emission beam (one magnetic pole), in the local frame of the
- * magnetic axis (+y, apex at the stellar surface).
+ * Volumetric pulsar emission (both magnetic poles), evaluated in the frame of the
+ * magnetic axis (+y), with the star at the origin and radius 1 (≈12 km).
  *
  * Emission model, following the empirical picture of radio pulsar beams
  * (Rankin 1983/1993; Ruderman & Sutherland 1975):
@@ -12,11 +12,16 @@ import { pixelScale } from '../shared';
  *  - an inner hollow "cone" fed by discrete sparks above the polar cap that
  *    circulate around the magnetic axis (E×B drift → drifting subpulses),
  *  - a fainter outer cone.
- * The beam is ray-marched through its bounding cone so it looks volumetric from
- * any angle, including from inside the beam.
+ *
+ * Light-travel delay: the radiation now at radius r left the star r/c ago, when the
+ * star was rotated back by Ω·r/c = r / R_LC. A snapshot of the beam is therefore an
+ * Archimedean spiral that winds by one radian per light-cylinder radius. For
+ * millisecond pulsars (R_LC ≈ 5 stellar radii) this is dramatic; for slow pulsars
+ * the beam is almost straight. The angle uses the real period, so it is physical
+ * even though the animation is slowed down.
  */
 
-export const BEAM_LENGTH = 18;
+export const BEAM_LENGTH = 20;
 
 export interface BeamUniforms {
   [key: string]: THREE.IUniform;
@@ -26,7 +31,9 @@ export interface BeamUniforms {
   uDrift: THREE.IUniform<number>;     // carousel angular speed (rad / s, visual)
   uCore: THREE.IUniform<number>;      // core component strength
   uIntensity: THREE.IUniform<number>;
-  uCamLocal: THREE.IUniform<THREE.Vector3>;
+  uLag: THREE.IUniform<number>;       // 1 / R_LC  (rad per stellar radius)
+  uSpinAxis: THREE.IUniform<THREE.Vector3>; // spin axis in the magnetic frame
+  uCamLocal: THREE.IUniform<THREE.Vector3>; // camera position in the magnetic frame
 }
 
 /** Angular emission profile shared by the shader and the JS pulse-profile plot. x = θ / θ_half. */
@@ -34,35 +41,55 @@ export function beamProfile(x: number, core: number): number {
   return core * Math.exp(-(x * x) / 0.08) + Math.exp(-(((x - 0.62) / 0.12) ** 2)) + 0.3 * Math.exp(-(((x - 0.95) / 0.07) ** 2));
 }
 
-const GLSL_PROFILE = /* glsl */ `
+const GLSL_COMMON = /* glsl */ `
+vec3 rotAxis(vec3 v, vec3 k, float a){
+  float c = cos(a), s = sin(a);
+  return v * c + cross(k, v) * s + k * dot(k, v) * (1.0 - c);
+}
+`;
+
+const GLSL_EMISSION = /* glsl */ `
 float sparkMod(float phi, float t){
   if (uSparks < 0.5) return 1.0;
   float s = 0.5 + 0.5 * cos(uSparks * (phi - uDrift * t));
-  return mix(0.12, 1.0, pow(s, 6.0));
+  return mix(0.1, 1.0, pow(s, 6.0));
 }
-float emission(vec3 q, float t){
+// One pole, axis +y.
+float poleEmission(vec3 q, float t){
   float y = q.y;
   if (y <= 0.0) return 0.0;
   float rho = length(q.xz);
   float x = atan(rho, y) / uHalf;
-  if (x > 1.2) return 0.0;
+  if (x > 1.25) return 0.0;
   float phi = atan(q.z, q.x);
   float sm = sparkMod(phi, t);
   float core = uCore * exp(-x * x / 0.08);
   float inner = exp(-pow((x - 0.62) / 0.12, 2.0)) * sm;
   float outer = 0.3 * exp(-pow((x - 0.95) / 0.07, 2.0)) * mix(1.0, sm, 0.5);
   // Plasma bunches streaming outward along the open field lines.
-  float bunch = 0.65 + 0.35 * snoise(vec3(x * 3.0, phi * 1.5, y * 0.7 - t * 5.0));
-  float radial = smoothstep(0.9, 2.2, y) * (1.0 - smoothstep(${(BEAM_LENGTH * 0.65).toFixed(1)}, ${BEAM_LENGTH.toFixed(1)}, y)) * 3.0 / (1.0 + 0.1 * y * y);
-  return (core * 1.2 + inner + outer) * bunch * radial;
+  float bunch = 0.7 + 0.3 * snoise(vec3(x * 3.0, phi * 1.5, y * 0.6 - t * 5.0));
+  float edge = smoothstep(1.25, 0.9, x);
+  float radial = smoothstep(1.0, 2.4, y) * (1.0 - smoothstep(${(BEAM_LENGTH * 0.6).toFixed(1)}, ${BEAM_LENGTH.toFixed(1)}, y)) * 3.0 / (1.0 + 0.08 * y * y);
+  return (core * 1.2 + inner + outer) * bunch * radial * edge;
+}
+float emission(vec3 q, float t, out float xcol){
+  float r = length(q);
+  // Undo the light-travel lag: find where this radiation was pointing when it left.
+  vec3 qe = rotAxis(q, uSpinAxis, uLag * r);
+  float e1 = poleEmission(qe, t);
+  float e2 = poleEmission(-qe, t + 17.0);
+  float y = abs(qe.y);
+  xcol = atan(length(qe.xz), y) / uHalf;
+  return e1 + e2;
 }
 `;
 
 export function createBeam(uniforms: BeamUniforms) {
   const mat = new THREE.ShaderMaterial({
-    uniforms,
+    uniforms: { ...uniforms, uSamples: volumeSamples },
     transparent: true,
     depthWrite: false,
+    depthTest: false,           // the ray is clipped against the star analytically
     side: THREE.BackSide,
     blending: THREE.AdditiveBlending,
     vertexShader: /* glsl */ `
@@ -71,78 +98,61 @@ export function createBeam(uniforms: BeamUniforms) {
     `,
     fragmentShader: /* glsl */ `
       varying vec3 vLocal;
-      uniform float uTime, uHalf, uSparks, uDrift, uCore, uIntensity;
-      uniform vec3 uCamLocal;
+      uniform float uTime, uHalf, uSparks, uDrift, uCore, uIntensity, uLag;
+      uniform vec3 uCamLocal, uSpinAxis;
+      uniform float uSamples;
       ${NOISE}
-      ${GLSL_PROFILE}
+      ${GLSL_COMMON}
+      ${GLSL_EMISSION}
       float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
       void main(){
         vec3 ro = uCamLocal;
-        vec3 d = vLocal - ro;
-        float tExit = length(d);
-        vec3 rd = d / tExit;
-        // Entry point: intersect the ray with the bounding cone (half-angle 1.25·θ) and its cap.
-        float k = pow(tan(uHalf * 1.25), 2.0);
-        float a = rd.x * rd.x + rd.z * rd.z - k * rd.y * rd.y;
-        float b = 2.0 * (ro.x * rd.x + ro.z * rd.z - k * ro.y * rd.y);
-        float c = ro.x * ro.x + ro.z * ro.z - k * ro.y * ro.y;
-        float tEnter = tExit;
-        float disc = b * b - 4.0 * a * c;
-        if (disc >= 0.0 && abs(a) > 1e-6) {
-          float sq = sqrt(disc);
-          for (int i = 0; i < 2; i++) {
-            float t = (-b + (i == 0 ? -sq : sq)) / (2.0 * a);
-            float y = ro.y + rd.y * t;
-            if (t >= 0.0 && t < tEnter - 1e-3 && y >= 0.0 && y <= ${BEAM_LENGTH.toFixed(1)}) tEnter = t;
-          }
-        }
-        if (abs(rd.y) > 1e-5) {
-          float t = (${BEAM_LENGTH.toFixed(1)} - ro.y) / rd.y;
-          vec3 p = ro + rd * t;
-          if (t >= 0.0 && t < tEnter - 1e-3 && dot(p.xz, p.xz) <= k * ${(BEAM_LENGTH * BEAM_LENGTH).toFixed(1)}) tEnter = t;
-        }
-        // Camera inside the beam volume: start at the camera.
-        float yc = ro.y;
-        if (yc > 0.0 && dot(ro.xz, ro.xz) < k * yc * yc && yc < ${BEAM_LENGTH.toFixed(1)}) tEnter = 0.0;
-        if (tEnter >= tExit) tEnter = max(tExit - ${BEAM_LENGTH.toFixed(1)}, 0.0);
+        vec3 rd = normalize(vLocal - ro);
+        // Segment of the ray inside the bounding sphere ...
+        float b = dot(ro, rd);
+        float R = ${BEAM_LENGTH.toFixed(1)};
+        float disc = b * b - (dot(ro, ro) - R * R);
+        if (disc <= 0.0) discard;
+        float sq = sqrt(disc);
+        float t0 = max(-b - sq, 0.0);
+        float t1 = -b + sq;
+        // ... stopped by the neutron star itself.
+        float ds = b * b - (dot(ro, ro) - 1.0);
+        if (ds > 0.0) { float ts = -b - sqrt(ds); if (ts > 0.0) t1 = min(t1, ts); }
+        if (t1 <= t0) discard;
 
-        const int N = 48;
-        float len = tExit - tEnter;
-        float dt = len / float(N);
-        float jitter = hash12(gl_FragCoord.xy + fract(uTime) * 61.0);
+        float N = uSamples;
+        float dt = (t1 - t0) / N;
+        float jitter = hash12(gl_FragCoord.xy + fract(uTime * 7.0) * 61.0);
         vec3 acc = vec3(0.0);
-        for (int i = 0; i < N; i++) {
-          vec3 q = ro + rd * (tEnter + (float(i) + jitter) * dt);
-          float e = emission(q, uTime);
+        for (int i = 0; i < 160; i++) {
+          if (float(i) >= N) break;
+          vec3 q = ro + rd * (t0 + (float(i) + jitter) * dt);
+          float xc;
+          float e = emission(q, uTime, xc);
+          if (e <= 0.0) continue;
           // False colour: radio emission is invisible; core shown blue-white, cone violet-blue.
-          float x = atan(length(q.xz), q.y) / uHalf;
-          vec3 col = mix(vec3(0.75, 0.88, 1.0), vec3(0.45, 0.5, 1.0), smoothstep(0.2, 0.7, x));
+          vec3 col = mix(vec3(0.78, 0.9, 1.0), vec3(0.45, 0.5, 1.0), smoothstep(0.2, 0.75, xc));
           acc += col * e * dt;
         }
         // Soft saturation so looking down the beam doesn't blow out to white.
-        vec3 e = acc * uIntensity * 2.2;
+        vec3 e = acc * uIntensity * 2.0;
         gl_FragColor = vec4(1.1 * (1.0 - exp(-e / 1.1)), 1.0);
       }
     `,
   });
-
-  const mesh = new THREE.Mesh(boundingCone(uniforms.uHalf.value), mat);
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(BEAM_LENGTH, 48, 32), mat);
   mesh.frustumCulled = false;
+  mesh.renderOrder = 10;
   return mesh;
 }
 
-export function boundingCone(half: number): THREE.BufferGeometry {
-  const r = Math.tan(half * 1.25) * BEAM_LENGTH;
-  const geo = new THREE.ConeGeometry(r, BEAM_LENGTH, 64, 1, false);
-  geo.rotateX(Math.PI);                 // apex down
-  geo.translate(0, BEAM_LENGTH / 2, 0); // apex at origin, opening along +y
-  return geo;
-}
-
-// Position of an outflowing particle at phase u along the open field lines of one pole.
+// Position of an outflowing particle at phase u along the open field lines of one pole,
+// then wound back by the light-travel lag so it follows the spiral beam.
 const PARTICLE_POS = /* glsl */ `
-vec3 particlePos(vec4 seed, float u){
-  float y = 1.0 + u * ${(BEAM_LENGTH - 2).toFixed(1)};
+${GLSL_COMMON}
+vec3 particlePos(vec4 seed, float pole, float u){
+  float y = 1.0 + u * ${(BEAM_LENGTH - 3).toFixed(1)};
   float x;
   float phi;
   if (seed.z < 0.35) {                // core stream
@@ -155,33 +165,38 @@ vec3 particlePos(vec4 seed, float u){
     phi = uSparks < 0.5 ? seed.z * 6.2831853 * 13.0
                         : 6.2831853 * mod(k, n) / n + uDrift * uTime + (seed.w - 0.5) * 0.1;
   }
-  // Field lines flare slightly with altitude: open lines are not exactly straight.
   float r = y * tan(x * uHalf) * (1.0 + 0.015 * y);
-  return vec3(r * cos(phi), y, r * sin(phi));
+  vec3 p = vec3(r * cos(phi), y, r * sin(phi)) * pole;
+  return rotAxis(p, uSpinAxis, -uLag * length(p));
 }
 float particleU(vec4 seed){ return fract(seed.x + uTime * (0.12 + 0.18 * seed.y)); }
 `;
 
 /**
- * Charged particles (e± pairs) streaming out along the open field lines of one pole.
+ * Charged particles (e± pairs) streaming out along the open field lines of both poles.
  * Rendered as motion-blurred streaks (line segments) plus glowing heads.
  */
-export function createParticles(uniforms: BeamUniforms, count = 5000) {
+export function createParticles(uniforms: BeamUniforms, count = 10000) {
   const seeds = new Float32Array(count * 4);
   for (let i = 0; i < seeds.length; i++) seeds[i] = Math.random();
+  const poles = new Float32Array(count);
+  for (let i = 0; i < count; i++) poles[i] = i % 2 ? 1 : -1;
   const group = new THREE.Group();
 
   // Streaks: 2 vertices per particle (head, tail).
   const sSeeds = new Float32Array(count * 8);
+  const sPoles = new Float32Array(count * 2);
   const ends = new Float32Array(count * 2);
   for (let i = 0; i < count; i++) {
     sSeeds.set(seeds.subarray(i * 4, i * 4 + 4), i * 8);
     sSeeds.set(seeds.subarray(i * 4, i * 4 + 4), i * 8 + 4);
+    sPoles[i * 2] = sPoles[i * 2 + 1] = poles[i];
     ends[i * 2 + 1] = 1;
   }
   const sGeo = new THREE.BufferGeometry();
   sGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 6), 3));
   sGeo.setAttribute('aSeed', new THREE.BufferAttribute(sSeeds, 4));
+  sGeo.setAttribute('aPole', new THREE.BufferAttribute(sPoles, 1));
   sGeo.setAttribute('aEnd', new THREE.BufferAttribute(ends, 1));
   const streakMat = new THREE.ShaderMaterial({
     uniforms,
@@ -189,21 +204,22 @@ export function createParticles(uniforms: BeamUniforms, count = 5000) {
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     vertexShader: /* glsl */ `
-      attribute vec4 aSeed; attribute float aEnd;
-      uniform float uTime, uHalf, uSparks, uDrift;
+      attribute vec4 aSeed; attribute float aPole; attribute float aEnd;
+      uniform float uTime, uHalf, uSparks, uDrift, uLag;
+      uniform vec3 uSpinAxis;
       varying float vA;
       ${PARTICLE_POS}
       void main(){
         float u = particleU(aSeed);
         float uu = max(u - aEnd * 0.035, 0.0);
-        vec3 p = particlePos(aSeed, uu);
+        vec3 p = particlePos(aSeed, aPole, uu);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
         vA = (1.0 - aEnd) * smoothstep(0.0, 0.08, u) * (1.0 - smoothstep(0.55, 1.0, u)) * (0.4 + 0.6 * aSeed.w);
       }
     `,
     fragmentShader: /* glsl */ `
       varying float vA;
-      void main(){ gl_FragColor = vec4(vec3(0.55, 0.75, 1.0) * vA * 0.4, 1.0); }
+      void main(){ gl_FragColor = vec4(vec3(0.55, 0.75, 1.0) * vA * 0.22, 1.0); }
     `,
   });
   const streaks = new THREE.LineSegments(sGeo, streakMat);
@@ -214,19 +230,21 @@ export function createParticles(uniforms: BeamUniforms, count = 5000) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
   geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 4));
+  geo.setAttribute('aPole', new THREE.BufferAttribute(poles, 1));
   const mat = new THREE.ShaderMaterial({
     uniforms: { ...uniforms, uPixel: pixelScale },
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     vertexShader: /* glsl */ `
-      attribute vec4 aSeed;
-      uniform float uTime, uHalf, uSparks, uDrift, uPixel;
+      attribute vec4 aSeed; attribute float aPole;
+      uniform float uTime, uHalf, uSparks, uDrift, uPixel, uLag;
+      uniform vec3 uSpinAxis;
       varying float vAlpha;
       ${PARTICLE_POS}
       void main(){
         float u = particleU(aSeed);
-        vec3 p = particlePos(aSeed, u);
+        vec3 p = particlePos(aSeed, aPole, u);
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
         float sz = uPixel * 0.05 / -mv.z;
@@ -239,7 +257,7 @@ export function createParticles(uniforms: BeamUniforms, count = 5000) {
       void main(){
         vec2 c = gl_PointCoord - 0.5;
         float f = exp(-dot(c, c) * 14.0);
-        gl_FragColor = vec4(vec3(0.75, 0.88, 1.0) * f * vAlpha * 0.75, 1.0);
+        gl_FragColor = vec4(vec3(0.75, 0.88, 1.0) * f * vAlpha * 0.5, 1.0);
       }
     `,
   });
@@ -259,7 +277,7 @@ export function createTrappedParticles(count = 7000) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
   geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 4));
-  const uniforms = { uTime: { value: 0 }, uPixel: pixelScale, uIntensity: { value: 1 } };
+  const uniforms = { uTime: { value: 0 }, uPixel: pixelScale, uIntensity: { value: 1 }, uMaxL: { value: 7.5 } };
   const mat = new THREE.ShaderMaterial({
     uniforms,
     transparent: true,
@@ -267,10 +285,11 @@ export function createTrappedParticles(count = 7000) {
     blending: THREE.AdditiveBlending,
     vertexShader: /* glsl */ `
       attribute vec4 aSeed;
-      uniform float uTime, uPixel;
+      uniform float uTime, uPixel, uMaxL;
       varying float vA;
       void main(){
-        float L = mix(1.6, 7.5, pow(aSeed.x, 1.3));
+        // Closed field lines only exist inside the light cylinder.
+        float L = mix(1.6, max(min(7.5, uMaxL), 1.7), pow(aSeed.x, 1.3));
         float th0 = asin(sqrt(1.0 / L));
         float mirror = mix(0.35, 0.95, aSeed.z);                // pitch angle → mirror latitude
         float s = sin(uTime * (0.8 + 1.2 * aSeed.y) / sqrt(L) + aSeed.w * 6.2831853);

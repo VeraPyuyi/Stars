@@ -13,42 +13,67 @@ export function createStar(): SimObject {
     uGranulation: { value: 1.0 },
     uCell: { value: 28.0 },
     uOblate: { value: 1.0 },
+    uCamLocal: { value: new THREE.Vector3(0, 0, 4) },
   };
+  // The star is ray-traced per pixel: a coarse proxy mesh only decides which pixels
+  // to shade; each pixel intersects the exact (unit / oblate) sphere analytically.
+  // No triangles show up in the silhouette, the shading or the surface pattern.
   const mat = new THREE.ShaderMaterial({
     uniforms,
+    transparent: true,
     vertexShader: /* glsl */ `
-      varying vec3 vObj; varying vec3 vN; varying vec3 vV;
+      varying vec3 vLocal;
       void main(){
-        vObj = position;
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        vN = normalize(normalMatrix * normal);
-        vV = normalize(-mv.xyz);
-        gl_Position = projectionMatrix * mv;
+        vLocal = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: /* glsl */ `
-      varying vec3 vObj; varying vec3 vN; varying vec3 vV;
+      varying vec3 vLocal;
       uniform float uTemp, uTime, uSpots, uGranulation, uCell, uOblate;
+      uniform vec3 uCamLocal;
+      // Built-in matrices are only declared for the vertex stage; three.js still
+      // uploads them to the program, so they can be declared here too.
+      uniform mat4 modelViewMatrix;
+      uniform mat4 projectionMatrix;
+      uniform mat3 normalMatrix;
       ${NOISE}
       ${WORLEY}
       ${BLACKBODY}
       void main(){
-        vec3 p = normalize(vObj);
-        float mu = clamp(dot(normalize(vN), normalize(vV)), 0.0, 1.0);
+        vec3 ro = uCamLocal;
+        vec3 rd = normalize(vLocal - ro);
+        float b = dot(ro, rd);
+        float disc = b * b - (dot(ro, ro) - 1.0);
+        if (disc < 0.0) discard;
+        float t = -b - sqrt(disc);
+        if (t < 0.0) discard;
+        vec3 p = ro + rd * t;                                   // exact surface point, |p| = 1
+        // Analytic coverage at the limb: anti-aliased silhouette without geometry.
+        float cover = clamp(disc / max(fwidth(disc), 1e-6), 0.0, 1.0);
+        vec4 mvp = modelViewMatrix * vec4(p, 1.0);
+        vec4 clip = projectionMatrix * mvp;
+        gl_FragDepth = clip.z / clip.w * 0.5 + 0.5;
+        vec3 vN = normalize(normalMatrix * p);
+        vec3 vV = normalize(-mvp.xyz);
+        float mu = clamp(dot(vN, vV), 0.0, 1.0);
         // Granulation: convection cells (bright hot upflows, dark cool intergranular lanes).
         // uCell ~ cell frequency: Sun-like stars have tiny cells, red supergiants only a
         // handful of giant ones (Schwarzschild 1975). Detail is level-of-detail filtered:
         // cells fade in as they become larger than a few pixels, so zooming in reveals more.
         float big = 1.0 - smoothstep(6.0, 14.0, uCell);       // 1 for supergiants
         float F = mix(uCell * 2.5, uCell * 1.1, big);
+        // Two-scale domain warp bends the Voronoi edges into rounded, irregular granules
+        // (no straight polygon sides).
         vec3 w = vec3(snoise(p * F * 0.35), snoise(p * F * 0.35 + 17.0), snoise(p * F * 0.35 + 31.0));
+        vec3 w2 = vec3(snoise(p * F * 1.3 + 3.0), snoise(p * F * 1.3 + 23.0), snoise(p * F * 1.3 + 41.0));
         float px = length(fwidth(p));                          // surface units per pixel
         float lod1 = 1.0 - smoothstep(0.12, 0.45, px * F);
         float lod2 = 1.0 - smoothstep(0.12, 0.45, px * F * 3.1);
-        vec3 c1 = worley(p * F + w * mix(0.65, 0.9, big), uTime * 0.15);
+        vec3 c1 = worley(p * F + w * mix(0.65, 0.9, big) + w2 * 0.12, uTime * 0.15);
         // Bright hot centre, gradual darkening outward, narrow cool lane; each cell
         // has its own brightness (young expanding granules are brighter).
-        float lane1 = smoothstep(0.0, mix(0.22, 0.45, big), c1.y - c1.x);
+        float lane1 = smoothstep(0.02, mix(0.3, 0.45, big), c1.y - c1.x);
         float centre = 1.12 - 0.4 * smoothstep(0.0, 0.85, c1.x);
         float cell1 = mix(0.55, 1.0, lane1) * centre * mix(0.88 + 0.24 * c1.z, 1.0, big);
         // Small-scale turbulent texture inside granules (only when resolvable).
@@ -82,8 +107,8 @@ export function createStar(): SimObject {
         float gd = 1.0 + delta * (p.y * p.y - 1.0 / 3.0);
         float T = uTemp * gd * (0.88 + 0.12 * pow(mu, 0.5)) * (1.0 - 0.3 * spot);
         float I = (limb * gran * (1.0 - spot) + fac) * pow(gd, 4.0);
-        float bright = 0.72 * pow(uTemp / 5772.0, -0.25);
-        gl_FragColor = vec4(blackbody(T) * I * bright, 1.0);
+        float bright = 0.82 * pow(uTemp / 5772.0, -0.25);
+        gl_FragColor = vec4(blackbody(T) * I * bright, cover);
       }
     `,
   });
@@ -91,7 +116,7 @@ export function createStar(): SimObject {
   const group = new THREE.Group();
   const tilt = new THREE.Group();          // rotation axis = +y of this node
   group.add(tilt);
-  const body = new THREE.Mesh(new THREE.SphereGeometry(1, 256, 192), mat);
+  const body = new THREE.Mesh(new THREE.SphereGeometry(1.04, 64, 48), mat);
   tilt.add(body);
   const prom = createProminences();
   body.add(prom.points);
@@ -138,6 +163,8 @@ export function createStar(): SimObject {
       wind.uniforms.uTime.value = time;
       wind.uniforms.uTwist.value = 0.2 + spin * 3;
       body.rotation.y += spin * dt;
+      body.updateMatrixWorld(true);
+      uniforms.uCamLocal.value.copy(body.worldToLocal(camera.position.clone()));
       glow.update(camera, time);
     },
   };
