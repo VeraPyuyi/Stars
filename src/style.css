@@ -20,6 +20,8 @@ html, body { margin: 0; height: 100%; background: #000; color: var(--fg);
 .row.toggle label { justify-content: flex-start; gap: 8px; cursor: pointer; color: var(--fg); }
 #info { font-size: 13px; color: #c9cfdb; }
 #info p { margin: 6px 0; }
+#info summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .06em; margin: 14px 0 6px; }
+#info summary:hover { color: var(--fg); }
 #info .approx { color: var(--muted); font-size: 12px; border-left: 2px solid rgba(255,255,255,0.2); padding-left: 8px; }
 #hint { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 12px;
   background: var(--panel); padding: 4px 12px; border-radius: 999px; pointer-events: none; }
@@ -63,6 +65,13 @@ body[data-mode=tour] .custom-only, body:not([data-mode=tour]) .tour-only { displ
 #stop-card .actions button:disabled { opacity: .35; cursor: default; }
 #stop-card .actions .primary { background: var(--accent); color: #08101f; border-color: var(--accent); font-weight: 600; }
 #stop-card .actions .link { background: none; border: 0; color: var(--accent); padding-left: 0; }
+/* The introduction is folded away until the "介绍" button is pressed; the card then only shows the name. */
+#stop-card .intro { display: none; }
+#stop-card.open .intro { display: block; animation: intro-in .35s ease; }
+#stop-card:not(.open) { bottom: auto; background: linear-gradient(90deg, rgba(3,5,12,0.55) 0%, rgba(3,5,12,0.25) 70%, rgba(3,5,12,0) 100%); }
+#stop-card:not(.open) h2 { margin-bottom: 4px; }
+#stop-card .actions .intro-toggle[aria-expanded=true] { background: rgba(127,178,255,0.16); border-color: rgba(127,178,255,0.45); }
+@keyframes intro-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 
 #travel-hud { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); text-align: center; opacity: 0;
   transition: opacity .5s ease; pointer-events: none; text-shadow: 0 1px 12px rgba(0,0,0,0.8); }
@@ -98,6 +107,7 @@ body[data-mode=tour] .custom-only, body:not([data-mode=tour]) .tour-only { displ
   #stop-card { top: auto; bottom: 126px; width: auto; right: 0; max-height: 42%; padding: 14px 16px;
     background: linear-gradient(0deg, rgba(3,5,12,0.9) 0%, rgba(3,5,12,0.7) 80%, rgba(3,5,12,0) 100%); }
   #stop-card h2 { font-size: 22px; }
+  #stop-card:not(.open) { bottom: 126px; background: linear-gradient(0deg, rgba(3,5,12,0.7) 0%, rgba(3,5,12,0.4) 70%, rgba(3,5,12,0) 100%); }
   #modes h1 { display: none; }
   #hint { display: none; }
 }

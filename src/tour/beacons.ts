@@ -11,6 +11,12 @@ function kelvin(T: number): THREE.Color {
   return new THREE.Color(r, g, b);
 }
 
+/** Colour of a planet seen as a point of light. */
+const PLANET_TINT: Record<string, number> = {
+  rocky: 0x8cb3ff, mercury: 0xb8b0a8, venus: 0xfff0c8, mars: 0xff9c6a,
+  jupiter: 0xf3dcc0, saturn: 0xf5e3b0, uranus: 0xa8e8f0, neptune: 0x7aa0ff,
+};
+
 /**
  * Every stop seen from afar is a point of light: the route ahead reads as a string of
  * stars, and the next object is visible long before it resolves into a disc.
@@ -21,7 +27,8 @@ export function createBeacons(stops: TourStop[], centers: THREE.Vector3[]) {
   const col = new Float32Array(stops.length * 3);
   stops.forEach((s, i) => {
     pos.set([centers[i].x, centers[i].y, centers[i].z], i * 3);
-    const c = s.kind === 'planet' ? new THREE.Color(0.55, 0.7, 1.0)
+    const c = s.kind === 'belt' ? new THREE.Color(0, 0, 0)
+      : s.kind === 'planet' ? new THREE.Color(PLANET_TINT[String(s.preset.values.type)] ?? 0x8cb3ff)
       : s.kind === 'pulsar' ? new THREE.Color(0.8, 0.88, 1.0)
       : s.kind === 'blackhole' ? kelvin(Number(s.preset.values.temp ?? 6000)).multiplyScalar(0.7)
       : kelvin(Number(s.preset.values.temp ?? 5772));
@@ -62,5 +69,14 @@ export function createBeacons(stops: TourStop[], centers: THREE.Vector3[]) {
   });
   const points = new THREE.Points(geo, mat);
   points.frustumCulled = false;
-  return { points, uniforms: mat.uniforms as { uScale: { value: number } } };
+  const attr = geo.getAttribute('position') as THREE.BufferAttribute;
+  return {
+    points,
+    uniforms: mat.uniforms as { uScale: { value: number } },
+    /** Planets move along their orbits: follow them. */
+    setPositions(centers: THREE.Vector3[]) {
+      centers.forEach((c, i) => attr.setXYZ(i, c.x, c.y, c.z));
+      attr.needsUpdate = true;
+    },
+  };
 }

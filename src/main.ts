@@ -15,6 +15,7 @@ import { createStar } from './objects/star';
 import { createPlanet } from './objects/planet';
 import { createPulsar } from './objects/pulsar';
 import { createBlackHole } from './objects/blackHole';
+import { createAsteroidBelt } from './objects/asteroidBelt';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -28,7 +29,7 @@ camera.position.set(0, 1, 4);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
-controls.dampingFactor = 0.06;
+controls.dampingFactor = 0.05;
 controls.rotateSpeed = 0.6;
 
 const sky = new Sky();
@@ -166,7 +167,8 @@ function select(obj: SimObject) {
   const global = $('global');
   global.innerHTML = '<h2>画面</h2>';
   global.append(renderParam(qualityParam), renderParam(exposure), renderParam(bloomParam));
-  $('info').innerHTML = `<h2>物理说明</h2>${obj.info}`;
+  // Folded by default: the explanation is there for whoever asks for it.
+  $('info').innerHTML = `<details><summary>ⓘ 物理说明</summary>${obj.info}</details>`;
   history.replaceState(null, '', `#custom/${obj.id}`);
 }
 
@@ -191,6 +193,7 @@ const factories: Record<StopKind, () => SimObject> = {
   star: createStar,
   pulsar: createPulsar,
   blackhole: () => createBlackHole(sky),
+  belt: () => createAsteroidBelt(),
 };
 let tour: Tour | null = null;
 let tourUI: TourUI | null = null;
@@ -257,12 +260,14 @@ function enterCustom(objId?: string) {
   select(objects.find((o) => o.id === objId) ?? current);
 }
 
-const KIND_TO_OBJECT: Record<StopKind, string> = { planet: 'planet', star: 'star', pulsar: 'pulsar', blackhole: 'blackhole' };
+/** Which custom-mode object takes a stop's parameters (the asteroid belt has none). */
+const KIND_TO_OBJECT: Record<StopKind, string | null> = { planet: 'planet', star: 'star', pulsar: 'pulsar', blackhole: 'blackhole', belt: null };
 
 /** Carry a real object's parameters into custom mode, where they can be changed freely. */
 function openInCustom(i: number) {
   const stop = TOUR_STOPS[i];
-  const obj = objects.find((o) => o.id === KIND_TO_OBJECT[stop.kind])!;
+  const obj = objects.find((o) => o.id === KIND_TO_OBJECT[stop.kind]);
+  if (!obj) return;
   if (tour) { tour.autoplay = false; tourUI?.setAutoplay(false); }
   setMode('custom');
   applyValues(obj, stop.preset.values);
@@ -304,6 +309,12 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowDown') holdDir = -1;
   else if (e.key === ' ') { e.preventDefault(); tourUI?.el.querySelector<HTMLButtonElement>('[data-a=auto]')?.click(); }
 });
+// A slight parallax follows the pointer while resting at a stop.
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse' || e.buttons) return;
+  tour?.setPointer((e.clientX / innerWidth) * 2 - 1, (e.clientY / innerHeight) * 2 - 1);
+});
+canvas.addEventListener('pointerleave', () => tour?.setPointer(0, 0));
 window.addEventListener('keyup', (e) => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') holdDir = 0; });
 /** Direction of a held "forward / back" button (or ↑ / ↓ key): the camera creeps along the route. */
 let holdDir = 0;
@@ -331,6 +342,7 @@ renderer.setAnimationLoop((now) => {
   const t = timer.getElapsed();
   if (mode === 'tour' && tour) {
     if (holdDir) tour.nudge(holdDir * dt * 0.6, 0.12);
+    tour.unparallax();
     if (!tour.moving) controls.update();
     tour.update(dt, t);
   } else {
