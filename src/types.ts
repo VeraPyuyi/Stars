@@ -7,6 +7,18 @@ export type Param =
       onChange: (v: string) => void }
   | { kind: 'toggle'; key: string; label: string; value: boolean; onChange: (v: boolean) => void };
 
+export interface Preset {
+  id: string;
+  name: string;
+  /** Param key -> value applied when the preset is selected. */
+  values: Record<string, number | string | boolean>;
+  /** Observed data rows shown in the info card: [label, value]. */
+  facts: [string, string][];
+  note?: string;
+  /** Optional camera direction (from the object) when the preset is chosen. */
+  view?: [number, number, number];
+}
+
 export interface SimObject {
   id: string;
   name: string;
@@ -18,5 +30,8 @@ export interface SimObject {
   bloom: { strength: number; radius: number; threshold: number };
   /** Black hole is rendered entirely by the sky ray-tracer. */
   skyMode?: 'blackhole';
+  presets?: Preset[];
+  /** Extra widget appended under the parameters (e.g. pulse profile plot). */
+  extraUI?: () => HTMLElement;
   update(dt: number, time: number, camera: THREE.PerspectiveCamera): void;
 }
