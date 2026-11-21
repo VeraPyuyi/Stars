@@ -18,10 +18,10 @@ export interface KindFrame {
 }
 
 export const KIND_FRAME: Record<StopKind, KindFrame> = {
-  planet: { extent: 1.6, rest: 3.6, min: 1.2, max: 20 },
-  star: { extent: 7, rest: 4.4, min: 1.3, max: 30 },
-  pulsar: { extent: 22, rest: 36, min: 2, max: 90 },
-  blackhole: { extent: 30, rest: 30, min: 4, max: 80 },
+  planet: { extent: 1.6, rest: 3.0, min: 1.2, max: 20 },
+  star: { extent: 7, rest: 3.6, min: 1.3, max: 30 },
+  pulsar: { extent: 22, rest: 30, min: 2, max: 90 },
+  blackhole: { extent: 30, rest: 26, min: 4, max: 80 },
   belt: { extent: 3, rest: 3, min: 0.5, max: 12 },
 };
 

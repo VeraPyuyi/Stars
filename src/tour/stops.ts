@@ -143,10 +143,12 @@ export function distanceLabel(ly: number): string {
 }
 
 /** Travel time between two stops: grows with the logarithm of the distance covered. */
-export function travelSeconds(a: TourStop, b: TourStop): number {
-  const d = Math.abs(b.ly - a.ly);
-  return Math.min(20, 3.5 + 2.2 * Math.log10(1 + d));
-}
+/**
+ * Every leg of the tour takes the same time, short or long: the camera simply covers
+ * more ground per second on the long interstellar legs than between the planets,
+ * so each object gets the same fly-by.
+ */
+export const LEG_SECONDS = 7;
 
 /** Distance part-way through a trip, interpolated on a log scale. */
 export function distanceAt(a: TourStop, b: TourStop, t: number): number {
