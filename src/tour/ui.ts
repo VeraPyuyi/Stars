@@ -7,6 +7,10 @@ export interface TourUIHandlers {
   prev(): void;
   toggleAuto(): void;
   openCustom(i: number): void;
+  /** Hold-to-move along the route: +1 forward, −1 back, 0 released. */
+  hold(dir: number): void;
+  /** Stop where the camera is. */
+  stop(): void;
 }
 
 const KIND_LABEL: Record<TourStop['kind'], string> = { planet: '行星', star: '恒星', pulsar: '脉冲星', blackhole: '黑洞' };
@@ -62,7 +66,27 @@ export class TourUI {
     inner.style.setProperty('--n', String(stops.length));
     inner.append(track, this.rail);
     route.append(inner);
-    this.el.append(this.card, this.hud, route);
+    // Manual drive: hold to creep forward / back along the route, or stop half-way.
+    const drive = document.createElement('div');
+    drive.id = 'drive';
+    const holdBtn = (label: string, dir: number, title: string) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.title = title;
+      const release = () => h.hold(0);
+      b.addEventListener('pointerdown', (e) => { b.setPointerCapture(e.pointerId); h.hold(dir); });
+      b.addEventListener('pointerup', release);
+      b.addEventListener('pointercancel', release);
+      b.addEventListener('lostpointercapture', release);
+      b.addEventListener('contextmenu', (e) => e.preventDefault());
+      return b;
+    };
+    const stopBtn = document.createElement('button');
+    stopBtn.className = 'stop';
+    stopBtn.textContent = '■ 停在这里';
+    stopBtn.addEventListener('click', () => h.stop());
+    drive.append(holdBtn('◀ 后退', -1, '按住后退（或按住 ↓）'), stopBtn, holdBtn('前进 ▶', 1, '按住前进（或按住 ↑）'));
+    this.el.append(this.card, this.hud, drive, route);
   }
 
   /** Fill the card for stop i and mark it on the route. */
@@ -101,7 +125,7 @@ export class TourUI {
 
   depart(from: number, to: number, seconds: number) {
     this.el.classList.add('travelling');
-    this.hudName.textContent = `${to > from ? '前往' : '返回'} ${this.stops[to].preset.name} · 约 ${seconds.toFixed(0)} 秒`;
+    this.hudName.textContent = `${to > from ? '前往' : '返回'} ${this.stops[to].preset.name} · 这一段约 ${seconds.toFixed(0)} 秒`;
   }
 
   progress(ly: number, t: number, from: number, to: number) {

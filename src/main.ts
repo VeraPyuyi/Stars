@@ -73,6 +73,7 @@ function resize() {
   volumeSamples.value = q.samples;
   pixelScale.value = (h * q.ratio) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
   lineResolution.set(w * q.ratio, h * q.ratio);
+  tour?.setPixelRatio(q.ratio);
 }
 
 const objects: SimObject[] = [createStar(), createPlanet(), createPulsar(), createBlackHole(sky)];
@@ -200,9 +201,11 @@ function ensureTour() {
   if (tour && tourUI) return { tour, ui: tourUI };
   const ui = new TourUI(TOUR_STOPS, {
     go: (i) => t.goTo(i),
+    hold: (dir) => { holdDir = dir; if (dir) ui.setAutoplay(false); },
+    stop: () => { t.hold(); ui.setAutoplay(false); },
     next: () => t.next(),
     prev: () => t.prev(),
-    toggleAuto: () => { t.autoplay = !t.autoplay; ui.setAutoplay(t.autoplay); if (t.autoplay && !t.trip) t.next(); },
+    toggleAuto: () => { t.autoplay = !t.autoplay; ui.setAutoplay(t.autoplay); if (t.autoplay) t.next(); },
     openCustom: (i) => openInCustom(i),
   });
   const t = new Tour(camera, controls, sky, factories, {
@@ -277,29 +280,33 @@ document.querySelectorAll<HTMLButtonElement>('#modes button').forEach((b) =>
   }),
 );
 
-// Wheel / keys travel along the route; with Ctrl (trackpad pinch), Shift or Alt the wheel zooms.
-let wheelAcc = 0;
+// The wheel moves the camera along the route by hand (it can stop half-way or go back);
+// with Ctrl (trackpad pinch), Shift or Alt it zooms. Arrow keys fly to the next / previous stop.
 canvas.addEventListener('wheel', (e) => {
   if (mode !== 'tour' || !tour) return;
   e.preventDefault();
+  const dy = (e.deltaY || e.deltaX) * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
   if (e.ctrlKey || e.shiftKey || e.altKey) {
-    if (tour.trip) return;
+    if (tour.moving) return;
     const d = camera.position.clone().sub(controls.target);
-    const len = THREE.MathUtils.clamp(d.length() * Math.exp((e.deltaY || e.deltaX) * 0.0015), controls.minDistance, controls.maxDistance);
+    const len = THREE.MathUtils.clamp(d.length() * Math.exp(dy * 0.0015), controls.minDistance, controls.maxDistance);
     camera.position.copy(controls.target).addScaledVector(d.normalize(), len);
     return;
   }
-  if (tour.trip) { wheelAcc = 0; return; }
-  wheelAcc += e.deltaY;
-  if (wheelAcc > 80) { wheelAcc = 0; tour.next(); }
-  else if (wheelAcc < -80) { wheelAcc = 0; tour.prev(); }
+  tour.nudge(dy / 700);
+  tourUI?.setAutoplay(false);
 }, { passive: false });
 window.addEventListener('keydown', (e) => {
   if (mode !== 'tour' || !tour || (e.target as HTMLElement).closest('input, select, textarea')) return;
   if (e.key === 'ArrowRight' || e.key === 'PageDown') tour.next();
   else if (e.key === 'ArrowLeft' || e.key === 'PageUp') tour.prev();
+  else if (e.key === 'ArrowUp') holdDir = 1;
+  else if (e.key === 'ArrowDown') holdDir = -1;
   else if (e.key === ' ') { e.preventDefault(); tourUI?.el.querySelector<HTMLButtonElement>('[data-a=auto]')?.click(); }
 });
+window.addEventListener('keyup', (e) => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') holdDir = 0; });
+/** Direction of a held "forward / back" button (or ↑ / ↓ key): the camera creeps along the route. */
+let holdDir = 0;
 
 {
   const [a, b] = location.hash.slice(1).split('/');
@@ -323,7 +330,8 @@ renderer.setAnimationLoop((now) => {
   const dt = Math.min(timer.getDelta(), 0.1);
   const t = timer.getElapsed();
   if (mode === 'tour' && tour) {
-    if (!tour.trip) controls.update();
+    if (holdDir) tour.nudge(holdDir * dt * 0.6, 0.12);
+    if (!tour.moving) controls.update();
     tour.update(dt, t);
   } else {
     controls.update();
