@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { NOISE } from '../shaders/common';
+import { NOISE, WORLEY } from '../shaders/common';
 import type { SimObject } from '../types';
 
 const SUN_DIR = new THREE.Vector3(1, 0.25, 0.6).normalize();
@@ -19,6 +19,7 @@ export function createPlanet(): SimObject {
   const uniforms = {
     uSun: { value: SUN_DIR.clone() },
     uType: { value: 0 }, // 0 rocky, 1 gas giant
+    uGain: { value: 2.2 },
     uTime: { value: 0 },
     uSea: { value: 0.0 },
     uSeed: { value: new THREE.Vector3(0.0, 0.0, 0.0) },
@@ -29,8 +30,9 @@ export function createPlanet(): SimObject {
     vertexShader: COMMON_VERT,
     fragmentShader: /* glsl */ `
       varying vec3 vObj; varying vec3 vWorldN; varying vec3 vWorldPos;
-      uniform vec3 uSun; uniform int uType; uniform float uTime; uniform float uSea; uniform vec3 uSeed;
+      uniform vec3 uSun; uniform int uType; uniform float uGain; uniform float uTime; uniform float uSea; uniform vec3 uSeed;
       ${NOISE}
+      ${WORLEY}
       vec3 rocky(vec3 p, vec3 N, vec3 V, out float ocean, out float height){
         vec3 q = p + uSeed;
         // Domain-warped continents.
@@ -58,21 +60,70 @@ export function createPlanet(): SimObject {
         ocean *= 1.0 - ice;
         return c;
       }
-      vec3 gas(vec3 p){
+      // Banded giant: light zones / dark belts, turbulence, optional storm oval.
+      vec3 gasBands(vec3 p, vec3 light, vec3 dark, float freq, float turbAmp, float storm, vec3 stormCol){
         float lat = p.y;
         vec3 q = p + uSeed;
         float turb = fbm(vec3(q.x * 2.0, q.y * 10.0, q.z * 2.0) + vec3(uTime * 0.01, 0.0, 0.0), 6);
-        float band = sin(lat * 22.0 + turb * 2.2) * 0.5 + 0.5;
+        float band = sin(lat * freq + turb * turbAmp) * 0.5 + 0.5;
         float fine = fbm(vec3(q.x * 6.0, lat * 40.0, q.z * 6.0), 4) * 0.5 + 0.5;
-        vec3 light = vec3(0.86, 0.78, 0.64);
-        vec3 dark = vec3(0.55, 0.33, 0.19);
         vec3 c = mix(dark, light, band);
         c *= 0.85 + 0.3 * fine;
-        // A long-lived anticyclone (storm oval).
         vec2 sp = vec2(atan(p.z, p.x) - 1.0, (lat + 0.35) * 2.6);
-        float oval = exp(-dot(sp, sp) * 14.0);
-        c = mix(c, vec3(0.7, 0.3, 0.18), oval * 0.8);
+        c = mix(c, stormCol, exp(-dot(sp, sp) * 14.0) * storm);
         return c;
+      }
+      // Airless, cratered rock (Mercury): bowls, bright rims, rays of fresh ejecta.
+      vec3 cratered(vec3 p, vec3 base, out float height){
+        vec3 q = p + uSeed;
+        float h = fbm(q * 3.0, 5) * 0.15;
+        float shade = 0.0;
+        float px = length(fwidth(p));
+        for (int k = 0; k < 3; k++) {
+          float sc = 4.0 * pow(2.6, float(k));
+          // Craters smaller than a few pixels would only sparkle: fade them out with distance.
+          float lod = 1.0 - smoothstep(0.08, 0.25, px * sc);
+          vec3 c = worley(q * sc, 0.0);
+          float r = c.x;
+          float bowl = 1.0 - smoothstep(0.0, 0.32, r);
+          float rim = smoothstep(0.22, 0.32, r) * (1.0 - smoothstep(0.32, 0.45, r));
+          float keep = step(0.55, fract(c.z * 7.13)) * lod;    // not every cell is a crater
+          h += (rim * 0.5 - bowl * 0.7) * keep / (1.0 + float(k));
+          shade += (rim * 0.25 - bowl * 0.12) * keep;
+        }
+        height = h;
+        float tone = 0.8 + 0.25 * fbm(q * 5.0, 4);
+        return base * tone * (1.0 + shade);
+      }
+      vec3 mars(vec3 p, out float height){
+        vec3 q = p + uSeed;
+        float h;
+        vec3 c = cratered(p, vec3(0.6, 0.3, 0.16), h);
+        // Dark basaltic plains (Syrtis Major-like) and bright dusty highlands.
+        float dark = smoothstep(0.05, 0.35, fbm(q * 1.4 + 2.0, 5));
+        c = mix(c, vec3(0.3, 0.17, 0.1), dark * 0.6);
+        float lat = abs(p.y);
+        float cap = smoothstep(0.86, 0.9, lat + 0.05 * fbm(q * 6.0, 3));
+        c = mix(c, vec3(0.92, 0.9, 0.88), cap);
+        height = h * 0.6 + dark * 0.05;
+        return c;
+      }
+      vec3 venus(vec3 p){
+        vec3 q = p + uSeed;
+        // Sulphuric-acid cloud deck: almost featureless, faint "Y" streaks in the UV.
+        float streak = fbm(vec3(q.x * 2.0 + uTime * 0.02, q.y * 7.0 + abs(q.y) * 3.0, q.z * 2.0), 5);
+        return mix(vec3(0.84, 0.74, 0.52), vec3(0.96, 0.9, 0.74), streak * 0.5 + 0.5);
+      }
+      vec3 surfaceColor(vec3 p, vec3 N, vec3 V, out float ocean, out float height){
+        ocean = 0.0; height = 0.0;
+        if (uType == 0) return rocky(p, N, V, ocean, height);
+        if (uType == 1) return gasBands(p, vec3(0.86, 0.78, 0.64), vec3(0.55, 0.33, 0.19), 22.0, 2.2, 0.8, vec3(0.7, 0.3, 0.18));
+        if (uType == 2) return cratered(p, vec3(0.36, 0.34, 0.32), height);
+        if (uType == 3) return venus(p);
+        if (uType == 4) return mars(p, height);
+        if (uType == 5) return gasBands(p, vec3(0.9, 0.82, 0.6), vec3(0.72, 0.6, 0.38), 30.0, 1.0, 0.0, vec3(0.0));
+        if (uType == 6) return gasBands(p, vec3(0.66, 0.88, 0.9), vec3(0.56, 0.8, 0.84), 14.0, 0.5, 0.0, vec3(0.0));
+        return gasBands(p, vec3(0.3, 0.48, 0.92), vec3(0.18, 0.3, 0.78), 16.0, 1.4, 0.7, vec3(0.08, 0.12, 0.4));
       }
       void main(){
         vec3 p = normalize(vObj);
@@ -80,10 +131,11 @@ export function createPlanet(): SimObject {
         vec3 V = normalize(cameraPosition - vWorldPos);
         float ocean = 0.0;
         float height = 0.0;
-        vec3 albedo = uType == 0 ? rocky(p, N, V, ocean, height) : gas(p);
-        if (uType == 0) {
+        vec3 albedo = surfaceColor(p, N, V, ocean, height);
+        bool solid = uType == 0 || uType == 2 || uType == 4;
+        if (solid) {
           // Bump mapping from the procedural height field (screen-space derivatives).
-          float hb = max(height, uSea);
+          float hb = uType == 0 ? max(height, uSea) : height * 0.15;
           vec3 dpdx = dFdx(vWorldPos), dpdy = dFdy(vWorldPos);
           float dhdx = dFdx(hb), dhdy = dFdy(hb);
           vec3 R1 = cross(dpdy, N), R2 = cross(N, dpdx);
@@ -93,13 +145,16 @@ export function createPlanet(): SimObject {
           // derivatives would otherwise flip whole 2×2 pixel blocks between lit and dark.
           vec3 g = 0.06 * grad / max(abs(det), 1e-12);
           g /= max(1.0, length(g) / 0.35);
+          // Height changing a lot from one pixel to the next cannot be shaded per 2×2 block
+          // without showing the blocks: fade the bump out there (it is below resolution anyway).
+          g *= (1.0 - smoothstep(0.015, 0.06, abs(dhdx) + abs(dhdy))) * smoothstep(0.08, 0.35, dot(N, V));
           N = normalize(N - g * smoothstep(-0.05, 0.35, dot(N, uSun)));
         }
         float NL = dot(N, uSun);
         float diff = max(NL, 0.0);
         // Soft terminator from atmospheric refraction/scattering.
         float term = smoothstep(-0.08, 0.15, NL);
-        vec3 col = albedo * (diff * 0.9 + 0.1 * term) * 2.2;
+        vec3 col = albedo * (diff * 0.9 + 0.1 * term) * uGain;
         // Specular sun glint on oceans.
         vec3 H = normalize(uSun + V);
         col += ocean * pow(max(dot(N, H), 0.0), 220.0) * 1.2 * term;
@@ -107,8 +162,8 @@ export function createPlanet(): SimObject {
         if (uType == 0) {
           float city = smoothstep(0.55, 0.85, snoise(p * 55.0 + uSeed)) * smoothstep(0.3, 0.6, fbm(p * 4.0 + uSeed, 3) + 0.5);
           col += (1.0 - ocean) * city * (1.0 - smoothstep(-0.15, 0.02, NL)) * vec3(1.0, 0.6, 0.25) * 0.5;
-        } else {
-          // Limb darkening for the deep atmosphere of a gas giant.
+        } else if (!solid) {
+          // Limb darkening for a deep atmosphere / cloud deck.
           col *= 0.55 + 0.45 * pow(max(dot(N, V), 0.0), 0.4);
         }
         gl_FragColor = vec4(col, 1.0);
@@ -145,9 +200,11 @@ export function createPlanet(): SimObject {
 
   // World position of the planet's centre (it is not at the origin during the tour).
   const center = { value: new THREE.Vector3() };
+  const radius = { value: 1 };
   const atmoUniforms = {
     uSun: uniforms.uSun,
     uCenter: center,
+    uRadius: radius,
     uScale: { value: 0.018 },
     uRayleigh: { value: new THREE.Color(0.28, 0.55, 1.0) },
     uStrength: { value: 1.4 },
@@ -162,9 +219,9 @@ export function createPlanet(): SimObject {
     vertexShader: COMMON_VERT,
     fragmentShader: /* glsl */ `
       varying vec3 vObj; varying vec3 vWorldN; varying vec3 vWorldPos;
-      uniform vec3 uSun; uniform float uScale; uniform vec3 uRayleigh; uniform float uStrength; uniform vec3 uCenter;
+      uniform vec3 uSun; uniform float uScale; uniform vec3 uRayleigh; uniform float uStrength; uniform vec3 uCenter; uniform float uRadius;
       void main(){
-        vec3 ro = cameraPosition - uCenter;          // planet-centred coordinates
+        vec3 ro = (cameraPosition - uCenter) / uRadius;   // planet-centred, in planet radii
         vec3 rd = normalize(vWorldPos - cameraPosition);
         float tc = -dot(ro, rd);
         vec3 closest = ro + rd * tc;
@@ -183,7 +240,7 @@ export function createPlanet(): SimObject {
     `,
   });
 
-  const ringUniforms = { uSun: uniforms.uSun, uCenter: center };
+  const ringUniforms = { uSun: uniforms.uSun, uCenter: center, uRadius: radius };
   const rings = new THREE.ShaderMaterial({
     uniforms: ringUniforms,
     transparent: true,
@@ -200,7 +257,7 @@ export function createPlanet(): SimObject {
     `,
     fragmentShader: /* glsl */ `
       varying vec3 vLocal; varying vec3 vWorldPos;
-      uniform vec3 uSun; uniform vec3 uCenter;
+      uniform vec3 uSun; uniform vec3 uCenter; uniform float uRadius;
       ${NOISE}
       void main(){
         float r = length(vLocal.xy);
@@ -209,10 +266,10 @@ export function createPlanet(): SimObject {
         dens *= smoothstep(1.35, 1.45, r) * (1.0 - smoothstep(2.25, 2.35, r));
         dens *= 1.0 - 0.85 * smoothstep(1.92, 1.95, r) * (1.0 - smoothstep(2.0, 2.03, r)); // Cassini-like gap
         // Planet shadow on the rings.
-        vec3 P = vWorldPos - uCenter;
+        vec3 P = (vWorldPos - uCenter) / uRadius;
         float t = -dot(P, uSun);
-        float shadow = (t > 0.0 && length(P + uSun * t) < 1.0) ? 0.05 : 1.0;
-        vec3 c = vec3(0.82, 0.74, 0.6) * (0.6 + 0.4 * dens) * shadow * 1.6;
+        float shadow = t > 0.0 ? mix(1.0, 0.1, 1.0 - smoothstep(0.96, 1.03, length(P + uSun * t))) : 1.0;
+        vec3 c = vec3(0.82, 0.74, 0.6) * (0.6 + 0.4 * dens) * shadow * 1.05;
         gl_FragColor = vec4(c, dens * 0.85);
       }
     `,
@@ -232,15 +289,31 @@ export function createPlanet(): SimObject {
   group.add(atmoMesh); // spherical; no need to rotate
 
   let spin = 0.08;
+  const tmpScale = new THREE.Vector3();
+  // Planet styles: shader type, axial tilt (°), rings, atmosphere (Rayleigh colour, scale height, strength).
+  // `gain` keeps bright cloud decks from burning out to white after tone mapping.
+  const STYLES: Record<string, { type: number; tilt: number; rings: boolean; gain: number; atmo: [number, number, number, number, number] }> = {
+    rocky: { type: 0, tilt: 23.4, rings: false, gain: 2.2, atmo: [0.28, 0.55, 1.0, 0.018, 1.4] },
+    gas: { type: 1, tilt: 26.7, rings: true, gain: 1.5, atmo: [0.8, 0.75, 0.6, 0.03, 0.35] },
+    mercury: { type: 2, tilt: 0.03, rings: false, gain: 2.1, atmo: [0, 0, 0, 0.01, 0] },
+    venus: { type: 3, tilt: 177.4, rings: false, gain: 1.45, atmo: [1.0, 0.82, 0.5, 0.035, 0.8] },
+    mars: { type: 4, tilt: 25.2, rings: false, gain: 1.9, atmo: [0.95, 0.6, 0.42, 0.012, 0.45] },
+    jupiter: { type: 1, tilt: 3.1, rings: false, gain: 1.45, atmo: [0.8, 0.75, 0.6, 0.03, 0.3] },
+    saturn: { type: 5, tilt: 26.7, rings: true, gain: 1.3, atmo: [0.85, 0.78, 0.55, 0.03, 0.28] },
+    uranus: { type: 6, tilt: 97.8, rings: false, gain: 1.15, atmo: [0.55, 0.85, 0.9, 0.03, 0.3] },
+    neptune: { type: 7, tilt: 28.3, rings: false, gain: 1.5, atmo: [0.3, 0.5, 1.0, 0.03, 0.45] },
+  };
   const setType = (t: string) => {
-    const gasGiant = t === 'gas';
-    uniforms.uType.value = gasGiant ? 1 : 0;
-    cloudMesh.visible = !gasGiant;
-    ringMesh.visible = gasGiant;
-    tilt.rotation.z = THREE.MathUtils.degToRad(gasGiant ? 26.7 : 23.4);
-    atmoUniforms.uRayleigh.value.set(...((gasGiant ? [0.8, 0.75, 0.6] : [0.28, 0.55, 1.0]) as [number, number, number]));
-    atmoUniforms.uScale.value = gasGiant ? 0.03 : 0.018;
-    atmoUniforms.uStrength.value = gasGiant ? 0.6 : 1.4;
+    const st = STYLES[t] ?? STYLES.rocky;
+    uniforms.uType.value = st.type;
+    uniforms.uGain.value = st.gain;
+    cloudMesh.visible = st.type === 0;
+    ringMesh.visible = st.rings;
+    atmoMesh.visible = st.atmo[4] > 0;
+    tilt.rotation.z = THREE.MathUtils.degToRad(st.tilt);
+    atmoUniforms.uRayleigh.value.setRGB(st.atmo[0], st.atmo[1], st.atmo[2]);
+    atmoUniforms.uScale.value = st.atmo[3];
+    atmoUniforms.uStrength.value = st.atmo[4];
   };
 
   return {
@@ -252,13 +325,19 @@ export function createPlanet(): SimObject {
     params: [
       {
         kind: 'select', key: 'type', label: '类型', value: 'rocky',
-        options: [ { value: 'rocky', label: '类地行星' }, { value: 'gas', label: '气态巨行星（带环）' } ],
+        options: [
+          { value: 'rocky', label: '类地行星（有海洋）' }, { value: 'gas', label: '气态巨行星（带环）' },
+          { value: 'mercury', label: '水星型（无大气、环形山）' }, { value: 'venus', label: '金星型（浓厚云层）' },
+          { value: 'mars', label: '火星型（红色荒漠、极冠）' }, { value: 'jupiter', label: '木星' },
+          { value: 'saturn', label: '土星（带环）' }, { value: 'uranus', label: '天王星（侧躺自转）' },
+          { value: 'neptune', label: '海王星' },
+        ],
         onChange: setType,
       },
       { kind: 'range', key: 'sea', label: '海平面', min: -0.4, max: 0.4, step: 0.01, value: 0, onChange: (v) => (uniforms.uSea.value = v) },
       { kind: 'range', key: 'cloud', label: '云量', min: 0, max: 1, step: 0.01, value: 0.6, onChange: (v) => (cloudUniforms.uCloud.value = v) },
       { kind: 'range', key: 'seed', label: '地形种子', min: 0, max: 100, step: 1, value: 0, onChange: (v) => uniforms.uSeed.value.set(v * 3.17, v * 1.91, v * 2.53) },
-      { kind: 'range', key: 'spin', label: '自转速度（演示）', min: 0, max: 1, step: 0.01, value: spin, onChange: (v) => (spin = v) },
+      { kind: 'range', key: 'spin', label: '自转速度（演示）', min: 0, max: 2, step: 0.01, value: spin, onChange: (v) => (spin = v) },
     ],
     info: `
       <p><b>光照</b>来自固定方向的“恒星”，旋转视角可看到昼夜两侧、晨昏线和夜面城市灯光。</p>
@@ -268,6 +347,7 @@ export function createPlanet(): SimObject {
     setLightDir(d) { uniforms.uSun.value.copy(d).normalize(); },
     update(dt, time) {
       group.getWorldPosition(center.value);
+      radius.value = group.getWorldScale(tmpScale).x;
       uniforms.uTime.value = time;
       body.rotation.y += spin * dt * 0.3;
       cloudMesh.rotation.y += spin * dt * 0.36;

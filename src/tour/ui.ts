@@ -1,5 +1,5 @@
 import type { SimObject } from '../types';
-import { formatDistance, type TourStop } from './stops';
+import { distanceLabel, type TourStop } from './stops';
 
 export interface TourUIHandlers {
   go(i: number): void;
@@ -13,7 +13,7 @@ export interface TourUIHandlers {
   stop(): void;
 }
 
-const KIND_LABEL: Record<TourStop['kind'], string> = { planet: '行星', star: '恒星', pulsar: '脉冲星', blackhole: '黑洞' };
+const KIND_LABEL: Record<TourStop['kind'], string> = { planet: '行星', star: '恒星', pulsar: '脉冲星', blackhole: '黑洞', belt: '小天体' };
 
 /**
  * The tour's overlay, laid out like the homepage flight: the story of the current
@@ -30,6 +30,8 @@ export class TourUI {
   private fill: HTMLElement;
   private autoBtn!: HTMLButtonElement;
   private lastCur = -1;
+  /** The introduction stays folded until asked for; once opened it stays open from stop to stop. */
+  private introOpen = false;
 
   constructor(private stops: TourStop[], private h: TourUIHandlers) {
     this.el = document.createElement('section');
@@ -56,7 +58,7 @@ export class TourUI {
       const li = document.createElement('li');
       const b = document.createElement('button');
       b.innerHTML = `<i></i><span>${s.short}</span>`;
-      b.title = `${s.preset.name} · ${formatDistance(s.ly)}`;
+      b.title = `${s.preset.name} · ${distanceLabel(s.ly)}`;
       b.addEventListener('click', () => h.go(i));
       li.append(b);
       this.rail.append(li);
@@ -95,24 +97,36 @@ export class TourUI {
     const p = s.preset;
     const rows = p.facts.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('');
     this.card.innerHTML = `
-      <p class="plate">✦ 第 ${i + 1} / ${this.stops.length} 站 · ${KIND_LABEL[s.kind]} · ${i === 0 ? '起点' : `距地球 ${formatDistance(s.ly)}`}</p>
+      <p class="plate">✦ 第 ${i + 1} / ${this.stops.length} 站 · ${KIND_LABEL[s.kind]} · ${i === 0 ? '起点' : distanceLabel(s.ly)}</p>
       <h2>${p.name}</h2>
-      ${p.note ? `<p class="note">${p.note}</p>` : ''}
-      <table class="facts-table">${rows}</table>
-      <details><summary>物理说明</summary><div class="info">${obj.info}</div></details>
-      <div class="extra"></div>
+      <div class="intro" id="stop-intro">
+        ${p.note ? `<p class="note">${p.note}</p>` : ''}
+        <table class="facts-table">${rows}</table>
+        ${obj.info ? `<details><summary>物理说明</summary><div class="info">${obj.info}</div></details>` : ''}
+        <div class="extra"></div>
+      </div>
       <div class="actions">
         <button data-a="prev" ${i === 0 ? 'disabled' : ''}>← 上一站</button>
         <button data-a="next" class="primary" ${i === this.stops.length - 1 ? 'disabled' : ''}>下一站 →</button>
         <button data-a="auto"></button>
-        <button data-a="custom" class="link">用这组参数自定义</button>
+        <button data-a="intro" class="intro-toggle" aria-controls="stop-intro"></button>
+        ${s.kind === 'belt' ? '' : '<button data-a="custom" class="link">用这组参数自定义</button>'}
       </div>`;
     if (obj.extraUI) this.card.querySelector('.extra')!.append(obj.extraUI());
+    const introBtn = this.card.querySelector<HTMLButtonElement>('[data-a=intro]')!;
+    const showIntro = (open: boolean) => {
+      this.introOpen = open;
+      this.card.classList.toggle('open', open);
+      introBtn.textContent = open ? '✕ 收起介绍' : 'ⓘ 介绍';
+      introBtn.setAttribute('aria-expanded', String(open));
+    };
+    showIntro(this.introOpen);
+    introBtn.addEventListener('click', () => showIntro(!this.introOpen));
     const on = (a: string, f: () => void) => this.card.querySelector<HTMLButtonElement>(`[data-a=${a}]`)!.addEventListener('click', f);
     on('prev', this.h.prev);
     on('next', this.h.next);
     on('auto', this.h.toggleAuto);
-    on('custom', () => this.h.openCustom(i));
+    if (s.kind !== 'belt') on('custom', () => this.h.openCustom(i));
     this.autoBtn = this.card.querySelector<HTMLButtonElement>('[data-a=auto]')!;
     this.el.classList.remove('travelling');
     this.mark(i, i, 0);
@@ -129,7 +143,7 @@ export class TourUI {
   }
 
   progress(ly: number, t: number, from: number, to: number) {
-    this.hudDist.textContent = ly <= 0 ? '地球' : `距地球 ${formatDistance(ly)}`;
+    this.hudDist.textContent = distanceLabel(ly);
     this.mark(from, to, t);
   }
 
