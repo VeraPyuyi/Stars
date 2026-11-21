@@ -79,6 +79,14 @@ export function layoutRoute(stops: TourStop[]): Placement[] {
     // it is only turned about +y towards the side the route leaves from.
     const base = stop.preset.view ? new THREE.Vector3(...stop.preset.view).normalize() : new THREE.Vector3(0, 0.22, 1).normalize();
     placements[i].view.copy(base.applyAxisAngle(UP, side * 0.7));
+    // A pole-on view (Vega) is kept no steeper than 60°: looking straight down while
+    // flying past would leave the camera's heading undefined and spin it round.
+    const v = placements[i].view, maxY = Math.sin(THREE.MathUtils.degToRad(60));
+    if (Math.abs(v.y) > maxY) {
+      const h = Math.hypot(v.x, v.z) || 1;
+      const k = Math.cos(THREE.MathUtils.degToRad(60)) / h;
+      v.set(v.x * k || Math.cos(THREE.MathUtils.degToRad(60)), Math.sign(v.y) * maxY, v.z * k);
+    }
   });
   updateOrbits(stops, placements, 0);
   return placements;
@@ -98,9 +106,10 @@ export function updateOrbits(stops: TourStop[], placements: Placement[], time: n
       // From just outside the belt and a little behind, looking along it towards the Sun's side.
       placements[i].view.copy(out).multiplyScalar(0.55).addScaledVector(along, -0.8).addScaledVector(UP, 0.32).normalize();
     } else {
-      // From the side, a little towards the Sun: half of the planet is lit, the terminator runs across it.
+      // From the side (along the orbit), a little towards the Sun: half of the planet is lit and the
+      // route, which runs outwards, passes beside the planet rather than through it.
       const side = k % 2 === 0 ? 1 : -1;
-      placements[i].view.copy(out).multiplyScalar(-0.55).addScaledVector(along, side).addScaledVector(UP, 0.25).normalize();
+      placements[i].view.copy(out).multiplyScalar(-0.2).addScaledVector(along, side).addScaledVector(UP, 0.3).normalize();
     }
     k++;
   });
@@ -113,32 +122,23 @@ export function restEye(p: Placement, frame: KindFrame, aspect: number, out = ne
 }
 
 /**
- * The camera's path from the resting eye at A to the one at B (a cubic Hermite curve).
- * It leaves A moving outwards, away from the object, and arrives at B from outside:
- * when the next object is behind the current one, the camera first pulls back and
- * swings round in a wide arc instead of grazing past the object.
+ * Centripetal Catmull–Rom (Barry–Goldman), between p1 and p2: unlike the uniform kind
+ * it neither overshoots nor loops when neighbouring points are very unevenly spaced
+ * (a planet's resting eye is a few units from it, the next stop tens of units away).
  */
-export function flightPath(a: THREE.Vector3, eyeA: THREE.Vector3, eyeB: THREE.Vector3, b: THREE.Vector3, t: number, out: THREE.Vector3) {
-  const D = _d.subVectors(eyeB, eyeA);
-  const L = D.length() || 1;
-  const outA = _oa.subVectors(eyeA, a), outB = _ob.subVectors(eyeB, b);
-  const rA = outA.length(), rB = outB.length();
-  outA.divideScalar(rA || 1);
-  outB.divideScalar(rB || 1);
-  const behindA = Math.max(0, 0.3 - D.dot(outA) / L), behindB = Math.max(0, 0.3 + D.dot(outB) / L);
-  const m1 = _m1.copy(D).multiplyScalar(0.5).addScaledVector(outA, rA * 0.5 + L * 0.7 * behindA);
-  const m2 = _m2.copy(D).multiplyScalar(0.5).addScaledVector(outB, -(rB * 0.5 + L * 0.7 * behindB));
-  const t2 = t * t, t3 = t2 * t;
-  return out.copy(eyeA).multiplyScalar(2 * t3 - 3 * t2 + 1)
-    .addScaledVector(m1, t3 - 2 * t2 + t)
-    .addScaledVector(eyeB, -2 * t3 + 3 * t2)
-    .addScaledVector(m2, t3 - t2);
+export function centripetal(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3, t: number, out: THREE.Vector3) {
+  const k = (a: THREE.Vector3, b: THREE.Vector3) => Math.max(Math.sqrt(a.distanceTo(b)), 1e-4);
+  const t0 = 0, t1 = t0 + k(p0, p1), t2 = t1 + k(p1, p2), t3 = t2 + k(p2, p3);
+  const u = t1 + (t2 - t1) * t;
+  const lerp = (o: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3, ta: number, tb: number) =>
+    o.copy(a).multiplyScalar((tb - u) / (tb - ta)).addScaledVector(b, (u - ta) / (tb - ta));
+  const A1 = lerp(_a1, p0, p1, t0, t1), A2 = lerp(_a2, p1, p2, t1, t2), A3 = lerp(_a3, p2, p3, t2, t3);
+  const B1 = lerp(_b1, A1, A2, t0, t2), B2 = lerp(_b2, A2, A3, t1, t3);
+  return lerp(out, B1, B2, t1, t2);
 }
-const _d = new THREE.Vector3(), _oa = new THREE.Vector3(), _ob = new THREE.Vector3(), _m1 = new THREE.Vector3(), _m2 = new THREE.Vector3();
+const _a1 = new THREE.Vector3(), _a2 = new THREE.Vector3(), _a3 = new THREE.Vector3(), _b1 = new THREE.Vector3(), _b2 = new THREE.Vector3();
 
 export const smoothstep = (t: number) => t * t * (3 - 2 * t);
-/** Slow out of the stop, fast in between, slow into the next one. */
-export const smootherstep = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 export const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
 /** Slow floating motion (offsets in units of the object's size), on long, unrelated periods. */

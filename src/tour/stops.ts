@@ -32,7 +32,7 @@ const planet = (id: string, name: string, type: string, facts: [string, string][
 
 const EARTH = planet('earth', '地球 Earth', 'rocky',
   [['半径', '6371 km'], ['到太阳', '1 AU = 1.496 亿 km（光走 8.3 分钟）'], ['公转', '365.25 天'], ['自转', '23.9 小时'], ['大气', '78% 氮、21% 氧']],
-  '旅程的起点。地形与云层为程序生成，并非真实的大陆轮廓。', { sea: 0, cloud: 0.6, seed: 0 });
+  '我们的家园，太阳系里唯一已知有液态水海洋和生命的行星。这里的地形与云层为程序生成，并非真实的大陆轮廓。', { sea: 0, cloud: 0.6, seed: 0 });
 const MERCURY = planet('mercury', '水星 Mercury', 'mercury',
   [['半径', '2440 km'], ['到太阳', '0.39 AU'], ['公转', '88 天'], ['自转', '58.6 天（公转两圈自转三圈）'], ['表面温度', '−173 ~ 427 °C']],
   '离太阳最近、最小的行星。几乎没有大气，所以布满环形山，昼夜温差是太阳系之最。');
@@ -63,11 +63,11 @@ const BELT: Preset = {
 /** Distances are rounded literature values; several (Deneb, the pulsars) are uncertain by tens of percent. */
 type Raw = [StopKind, Preset, number, Partial<Pick<TourStop, 'scale' | 'orbit' | 'rotHours'>>?];
 const RAW: Raw[] = [
-  // The solar system, from Earth to the Sun and then outwards (distance = from the Sun).
-  ['planet', EARTH, 1 * AU_LY, { scale: 0.26, orbit: { au: 1, years: 1 }, rotHours: 23.9 }],
+  // The solar system, from the Sun outwards (distance = from the Sun).
   ['star', find(STAR_PRESETS, 'sun'), 0, { rotHours: 609 }],
   ['planet', MERCURY, 0.387 * AU_LY, { scale: 0.16, orbit: { au: 0.387, years: 0.241 }, rotHours: 1408 }],
   ['planet', VENUS, 0.723 * AU_LY, { scale: 0.25, orbit: { au: 0.723, years: 0.615 }, rotHours: -5832 }],
+  ['planet', EARTH, 1 * AU_LY, { scale: 0.26, orbit: { au: 1, years: 1 }, rotHours: 23.9 }],
   ['planet', MARS, 1.524 * AU_LY, { scale: 0.19, orbit: { au: 1.524, years: 1.881 }, rotHours: 24.6 }],
   ['belt', BELT, 2.7 * AU_LY, { scale: 1, orbit: { au: 2.7, years: 4.6 } }],
   ['planet', JUPITER, 5.2 * AU_LY, { scale: 0.9, orbit: { au: 5.2, years: 11.86 }, rotHours: 9.93 }],
