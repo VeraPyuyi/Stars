@@ -150,6 +150,7 @@ export function createPulsar(): SimObject {
 
   const lines = fieldLines();
   magNode.add(lines);
+  lines.visible = false; // field lines are a diagram: off until asked for
   const trapped = createTrappedParticles(7000);
   magNode.add(trapped.points);
 
@@ -182,6 +183,7 @@ export function createPulsar(): SimObject {
   magNode.add(particles);
   const openLines = openFieldLines();
   magNode.add(openLines);
+  openLines.visible = false;
 
   let alpha = 35;
   let spin = 1.2;
@@ -227,8 +229,8 @@ export function createPulsar(): SimObject {
     { kind: 'range', key: 'sparks', label: '火花数（旋转木马）', min: 0, max: 24, step: 1, value: 12,
       format: (v) => (v === 0 ? '0（连续锥）' : v.toFixed(0)), onChange: (v) => (shared.uSparks.value = v) },
     { kind: 'range', key: 'drift', label: '火花漂移速度', min: -1.5, max: 1.5, step: 0.05, value: 0.3, onChange: (v) => (shared.uDrift.value = v) },
-    { kind: 'toggle', key: 'lines', label: '闭合磁力线', value: true, onChange: (v) => { lines.visible = v; } },
-    { kind: 'toggle', key: 'open', label: '开放磁力线', value: true, onChange: (v) => (openLines.visible = v) },
+    { kind: 'toggle', key: 'lines', label: '闭合磁力线', value: false, onChange: (v) => { lines.visible = v; } },
+    { kind: 'toggle', key: 'open', label: '开放磁力线', value: false, onChange: (v) => (openLines.visible = v) },
     { kind: 'toggle', key: 'particles', label: '外流等离子体粒子', value: true, onChange: (v) => (particles.visible = v) },
     { kind: 'toggle', key: 'trapped', label: '磁层被俘粒子', value: true, onChange: (v) => (trapped.points.visible = v) },
     { kind: 'toggle', key: 'lc', label: '光速圆柱', value: true, onChange: (v) => { showLC = v; setPeriod(Math.log10(periodMs)); } },
