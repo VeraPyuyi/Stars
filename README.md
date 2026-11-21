@@ -4,6 +4,8 @@
 
 在浏览器里实时渲染**恒星、行星、中子星、脉冲星和黑洞**，力求在物理上“说得通”，并且可以用鼠标/触屏拖动旋转、缩放查看。
 
+**在线预览：https://verapyuyi.github.io/Stars/**
+
 A physically-inspired, interactive WebGL renderer for stars, planets, neutron stars, pulsars and black holes. Runs in any modern browser — no install needed.
 
 ![screenshots](docs/screenshots.jpg)
@@ -25,8 +27,10 @@ A physically-inspired, interactive WebGL renderer for stars, planets, neutron st
 ```bash
 npm install
 npm run dev      # 打开 http://localhost:5173
-npm run build    # 生成静态文件到 dist/，可直接部署到 GitHub Pages
+npm run build    # 生成静态文件到 dist/
 ```
+
+推送到 `main` 后，GitHub Actions 会自动构建并发布到 GitHub Pages（见 `.github/workflows/deploy.yml`）。
 
 需要支持 WebGL2 的浏览器。黑洞场景计算量较大，可在面板里调低“光线追踪质量”。
 
