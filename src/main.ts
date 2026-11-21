@@ -198,6 +198,15 @@ const factories: Record<StopKind, () => SimObject> = {
 let tour: Tour | null = null;
 let tourUI: TourUI | null = null;
 type Mode = 'tour' | 'custom';
+let prewarmed = false;
+
+/** Fly to stop i and stop there, with its introduction open (clicking an object, or its ⓘ). */
+function showDetails(i: number) {
+  if (!tour || !tourUI) return;
+  tour.goTo(i);
+  tourUI.setAutoplay(false);
+  tourUI.openDetails(i, tour.object(i));
+}
 let mode: Mode = 'tour';
 
 function ensureTour() {
@@ -208,12 +217,14 @@ function ensureTour() {
     stop: () => { t.hold(); ui.setAutoplay(false); },
     next: () => t.next(),
     prev: () => t.prev(),
-    toggleAuto: () => { t.autoplay = !t.autoplay; ui.setAutoplay(t.autoplay); if (t.autoplay) t.next(); },
+    toggleAuto: () => { t.setAutoplay(!t.autoplay); ui.setAutoplay(t.autoplay); },
+    details: (i) => showDetails(i),
     openCustom: (i) => openInCustom(i),
   });
   const t = new Tour(camera, controls, sky, factories, {
+    near: (i) => ui.near(i, t.object(i)),
     arrive: (i) => {
-      ui.arrive(i, t.object(i));
+      ui.arrive(i);
       ui.setAutoplay(t.autoplay);
       if (mode === 'tour') history.replaceState(null, '', `#tour/${TOUR_STOPS[i].id}`);
     },
@@ -235,6 +246,7 @@ function setMode(m: Mode) {
     scene.remove(customRoot);
     const { tour: t } = ensureTour();
     scene.add(t.root);
+    if (!prewarmed) { t.prewarm(renderer, scene); prewarmed = true; }
     controls.enableZoom = false;   // the wheel travels along the route, as on the homepage
     camera.near = 0.02;
     camera.far = 6000;
@@ -315,6 +327,21 @@ canvas.addEventListener('pointermove', (e) => {
   tour?.setPointer((e.clientX / innerWidth) * 2 - 1, (e.clientY / innerHeight) * 2 - 1);
 });
 canvas.addEventListener('pointerleave', () => tour?.setPointer(0, 0));
+// Clicking an object (a click, not a drag) shows its details.
+{
+  let down: { x: number; y: number; t: number } | null = null;
+  canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!down || mode !== 'tour' || !tour) return;
+    const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+    const quick = performance.now() - down.t < 500;
+    down = null;
+    if (moved > 6 || !quick) return;
+    const r = canvas.getBoundingClientRect();
+    const i = tour.pick(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+    if (i >= 0) showDetails(i);
+  });
+}
 window.addEventListener('keyup', (e) => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') holdDir = 0; });
 /** Direction of a held "forward / back" button (or ↑ / ↓ key): the camera creeps along the route. */
 let holdDir = 0;

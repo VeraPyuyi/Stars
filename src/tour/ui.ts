@@ -7,6 +7,8 @@ export interface TourUIHandlers {
   prev(): void;
   toggleAuto(): void;
   openCustom(i: number): void;
+  /** Show the details of stop i (and fly there). */
+  details(i: number): void;
   /** Hold-to-move along the route: +1 forward, −1 back, 0 released. */
   hold(dir: number): void;
   /** Stop where the camera is. */
@@ -30,8 +32,11 @@ export class TourUI {
   private fill: HTMLElement;
   private autoBtn!: HTMLButtonElement;
   private lastCur = -1;
-  /** The introduction stays folded until asked for; once opened it stays open from stop to stop. */
+  /** The introduction stays folded until asked for. */
   private introOpen = false;
+  /** Stop the card describes, and one it is held on (opened by a click) until the camera gets there. */
+  private shown = -1;
+  private lock = -1;
 
   constructor(private stops: TourStop[], private h: TourUIHandlers) {
     this.el = document.createElement('section');
@@ -91,8 +96,32 @@ export class TourUI {
     this.el.append(this.card, this.hud, drive, route);
   }
 
-  /** Fill the card for stop i and mark it on the route. */
-  arrive(i: number, obj: SimObject) {
+  /** The camera is now nearest to stop i: the card follows it (folded), unless held on a clicked stop. */
+  near(i: number, obj: SimObject) {
+    if (this.lock >= 0) {
+      if (i !== this.lock) return;
+      this.lock = -1;
+    }
+    if (i !== this.shown) this.show(i, obj, false);
+  }
+
+  /** Show stop i with its introduction open, and keep it on the card while the camera flies there. */
+  openDetails(i: number, obj: SimObject) {
+    this.lock = i;
+    this.show(i, obj, true);
+  }
+
+  /** The camera came to rest at stop i. */
+  arrive(i: number) {
+    this.lock = -1;
+    this.el.classList.remove('travelling');
+    this.mark(i, i, 0);
+  }
+
+  /** Fill the card for stop i. */
+  private show(i: number, obj: SimObject, open: boolean) {
+    this.shown = i;
+    this.introOpen = open;
     const s = this.stops[i];
     const p = s.preset;
     const rows = p.facts.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('');
@@ -121,15 +150,16 @@ export class TourUI {
       introBtn.setAttribute('aria-expanded', String(open));
     };
     showIntro(this.introOpen);
-    introBtn.addEventListener('click', () => showIntro(!this.introOpen));
+    introBtn.addEventListener('click', () => {
+      if (this.introOpen) { this.lock = -1; showIntro(false); } else this.h.details(i);
+    });
     const on = (a: string, f: () => void) => this.card.querySelector<HTMLButtonElement>(`[data-a=${a}]`)!.addEventListener('click', f);
     on('prev', this.h.prev);
     on('next', this.h.next);
     on('auto', this.h.toggleAuto);
     if (s.kind !== 'belt') on('custom', () => this.h.openCustom(i));
     this.autoBtn = this.card.querySelector<HTMLButtonElement>('[data-a=auto]')!;
-    this.el.classList.remove('travelling');
-    this.mark(i, i, 0);
+    this.setAutoplay(this.el.classList.contains('auto'));
   }
 
   setAutoplay(on: boolean) {

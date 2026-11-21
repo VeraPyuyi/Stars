@@ -4,7 +4,7 @@ import type { Sky } from '../sky';
 import type { SimObject } from '../types';
 import { TOUR_STOPS, displayedRotation, distanceAt, travelSeconds, type StopKind, type TourStop } from './stops';
 import {
-  clamp01, drift, flightPath, frameOf, isSolar, layoutRoute, restEye, smootherstep, smoothstep, updateOrbits,
+  centripetal, clamp01, drift, frameOf, isSolar, layoutRoute, restEye, smoothstep, updateOrbits,
   type KindFrame, type Placement,
 } from './route';
 import { createDust } from './dust';
@@ -18,6 +18,8 @@ export interface TourEvents {
   depart(from: number, to: number, seconds: number): void;
   /** Every frame away from a stop: distance from Earth (ly) and progress 0..1 along the leg from→to. */
   progress(ly: number, t: number, from: number, to: number): void;
+  /** The stop nearest to the camera changed (it is the one the name tag and card describe). */
+  near(index: number): void;
   /** Bloom settings to blend towards. */
   bloom(b: SimObject['bloom']): void;
 }
@@ -64,9 +66,8 @@ export class Tour {
   /** Continuous position on the route (0 … stops − 1) and where it is heading. */
   progress = 0;
   target = 0;
+  /** Cruise along the route without stopping (slowing down a little past each object). */
   autoplay = false;
-  /** Seconds to linger at each stop while auto-playing. */
-  dwell = 9;
 
   private placements: Placement[];
   private frames: KindFrame[];
@@ -83,6 +84,10 @@ export class Tour {
   private wantQuat = new THREE.Quaternion();
   private lookQ = new THREE.Quaternion();
   private shownQuat = new THREE.Quaternion();
+  private e0 = new THREE.Vector3();
+  private e1 = new THREE.Vector3();
+  private e2 = new THREE.Vector3();
+  private e3 = new THREE.Vector3();
   private turnLeg = '';
   private lastYaw = 0;
   private lookM = new THREE.Matrix4();
@@ -91,7 +96,7 @@ export class Tour {
   private pointerSmooth = new THREE.Vector2();
   private parallax = new THREE.Vector3();
   private lastCenter = new THREE.Vector3();
-  private restTime = 0;
+  private nearest = -1;
   private resting = true;
   private anchor: Anchor | null = null;
   private leg = '';
@@ -123,6 +128,42 @@ export class Tour {
   }
 
   private beacons: ReturnType<typeof createBeacons>;
+
+  /**
+   * Build every object and compile all their shaders up front. Done lazily, the first
+   * frame an object appeared in would stall while its shaders compiled: a visible hitch
+   * on arriving at each new kind of object.
+   */
+  prewarm(renderer: THREE.WebGLRenderer, scene: THREE.Scene) {
+    this.stops.forEach((_, i) => { this.object(i).group.visible = true; });
+    this.orbits.lines.visible = true;
+    renderer.compileAsync(scene, this.camera).catch(() => { /* compiled on first use instead */ });
+  }
+
+  /**
+   * The stop whose object is under the pointer (canvas pixels), nearest first, or −1.
+   * Generous: anything within the object's disc, or 28 px of its centre, counts.
+   */
+  pick(x: number, y: number, w: number, h: number): number {
+    let best = -1, bestDist = Infinity;
+    const focal = (h / 2) * this.camera.projectionMatrix.elements[5];
+    this.objects.forEach((o, i) => {
+      const stop = this.stops[i];
+      if (!o || !o.group.visible || stop.kind === 'belt') return;
+      const c = this.placements[i].center;
+      const v = this.tmp.copy(c).applyMatrix4(this.camera.matrixWorldInverse);
+      if (v.z > -1e-3) return; // behind the camera
+      const ring = stop.preset.values.type === 'saturn' || stop.preset.values.type === 'gas';
+      const R = stop.kind === 'planet' ? stop.scale * (ring ? 2.4 : 1.1)
+        : stop.kind === 'star' ? 1.2 : stop.kind === 'pulsar' ? 4 : 8;
+      const p = this.tmp2.copy(c).project(this.camera);
+      const sx = (p.x + 1) / 2 * w, sy = (1 - p.y) / 2 * h;
+      const reach = Math.max((R / -v.z) * focal, 28);
+      const d = Math.hypot(sx - x, sy - y);
+      if (d < reach && -v.z < bestDist) { best = i; bestDist = -v.z; }
+    });
+    return best;
+  }
 
   /** Device-pixel scale for the distant points of light. */
   setPixelRatio(r: number) { this.beacons.uniforms.uScale.value = r; }
@@ -184,7 +225,6 @@ export class Tour {
   private settle(i: number) {
     const f = this.frames[i];
     this.resting = true;
-    this.restTime = 0;
     this.index = i;
     this.leg = '';
     this.speed = 0;
@@ -213,23 +253,43 @@ export class Tour {
    */
   nudge(delta: number, lead = 0.2) {
     this.autoplay = false;
-    let t = THREE.MathUtils.clamp(this.target + delta, this.progress - lead, this.progress + lead);
-    // Close to a stop: settle on it rather than hovering just short of it.
-    if (Math.abs(t - Math.round(t)) < 0.03) t = Math.round(t);
+    // No snapping to stops: the camera flies straight past them while the input goes on.
+    const t = THREE.MathUtils.clamp(this.target + delta, this.progress - lead, this.progress + lead);
     this.target = THREE.MathUtils.clamp(t, 0, this.last);
   }
 
-  /** Stop where the camera is now. */
-  hold() { this.target = this.progress; this.autoplay = false; }
+  /** Stop where the camera is now (coasting to a halt rather than braking at once). */
+  hold() {
+    this.autoplay = false;
+    this.target = THREE.MathUtils.clamp(this.progress + this.speed * 0.5, 0, this.last);
+  }
 
-  /** Fly to stop i. */
+  /** Cruise along the whole route, or stop cruising. */
+  setAutoplay(on: boolean) {
+    this.autoplay = on && this.progress < this.last;
+    if (this.autoplay) this.target = this.last;
+    else if (this.target !== Math.round(this.target)) this.hold();
+  }
+
+  /** Fly to stop i and stop there. */
   goTo(i: number) {
+    this.autoplay = false;
     this.target = THREE.MathUtils.clamp(i, 0, this.last);
   }
 
   /** The stop ahead / behind in the direction asked, from wherever the camera is. */
-  next() { this.goTo(Math.floor(this.target + 1e-6) + 1); }
-  prev() { this.goTo(Math.ceil(this.target - 1e-6) - 1); }
+  next() { const b = this.autoplay ? this.progress : this.target; this.goTo(Math.floor(b + 1e-6) + 1); }
+  prev() { const b = this.autoplay ? this.progress : this.target; this.goTo(Math.ceil(b - 1e-6) - 1); }
+
+  /** Index of the stop nearest along the route. */
+  get current() { return Math.round(this.progress); }
+
+  /** Resting eye of stop k (or the orbited view the camera left it from). */
+  private eyeAt(k: number, out: THREE.Vector3) {
+    const pl = this.placements[k];
+    if (this.anchor?.index === k) return out.copy(pl.center).add(this.anchor.eye);
+    return restEye(pl, this.frames[k], this.aspect, out);
+  }
 
   /** Which stops are drawn this frame. */
   private visibleSet(): number[] {
@@ -244,8 +304,15 @@ export class Tour {
   }
 
   private advance(dt: number) {
-    const gap = this.target - this.progress;
-    if (Math.abs(gap) < 1e-6) return;
+    let gap = this.target - this.progress;
+    if (Math.abs(gap) < 1e-6) {
+      this.speed = 0;
+      // Came to a halt just short of (or past) a stop: drift onto it and rest there.
+      const r = Math.round(this.progress);
+      if (!this.resting && !this.autoplay && Math.abs(this.progress - r) < 0.08 && this.progress !== r) this.target = r;
+      gap = this.target - this.progress;
+      if (Math.abs(gap) < 1e-6) return;
+    }
     if (this.resting) {
       // Leaving a stop: remember the (possibly orbited) view, the flight starts from it.
       this.resting = false;
@@ -267,11 +334,16 @@ export class Tour {
     // (far jumps, clicking a distant stop, are allowed to go proportionally faster).
     const i = Math.min(this.last - 1, Math.floor(gap > 0 ? this.progress : this.progress - 1e-6));
     const seconds = travelSeconds(this.stops[Math.max(0, i)], this.stops[Math.max(0, i) + 1]);
-    const vmax = (1 / seconds) * Math.max(1, Math.abs(gap) / 2.5);
+    let vmax = (1 / seconds) * (this.autoplay ? 1 : Math.max(1, Math.abs(gap) / 2.5));
+    if (this.autoplay) {
+      // Cruising: slow down while passing each object so it can be seen, never stop.
+      const d = Math.abs(this.progress - Math.round(this.progress));
+      vmax *= 0.3 + 0.7 * smoothstep(clamp01(d / 0.3));
+    }
     let want = THREE.MathUtils.clamp(gap * 1.8, -vmax, vmax);
     // A minimum pace near the end, so arriving does not crawl forever.
     if (Math.abs(want) < 0.05) want = Math.sign(gap) * 0.05;
-    const accel = (vmax / 0.9) * dt;
+    const accel = (1 / seconds / 0.9) * dt * (this.autoplay ? 1 : Math.max(1, Math.abs(gap) / 2.5));
     this.speed += THREE.MathUtils.clamp(want - this.speed, -accel, accel);
     const before = Math.sign(gap);
     this.progress += this.speed * dt;
@@ -305,34 +377,34 @@ export class Tour {
     if (!this.resting) {
       const p = this.progress;
       const i = Math.min(this.last - 1, Math.floor(p));
-      const raw = p - i;
-      // Linger a little near each stop, travel faster in between.
-      const t = raw + (smootherstep(raw) - raw) * 0.35;
+      const t = p - i;
       const A = this.placements[i], B = this.placements[i + 1];
       const anchorA = this.anchor?.index === i ? this.anchor : null;
       const anchorB = this.anchor?.index === i + 1 ? this.anchor : null;
-      // The Sun is approached (or left) from the side of the planet at the other end of the leg.
-      // (Not on the arrival frame itself, which sits at the start of the following leg.)
-      if (raw > 0 && i + 1 === this.sun) this.faceSun(A.center);
-      else if (raw > 0 && i === this.sun) this.faceSun(B.center);
-      const eyeA = anchorA ? A.center.clone().add(anchorA.eye) : restEye(A, this.frames[i], this.aspect);
-      const eyeB = anchorB ? B.center.clone().add(anchorB.eye) : restEye(B, this.frames[i + 1], this.aspect);
-      flightPath(A.center, eyeA, eyeB, B.center, t, cam.position);
+      // The Sun is left from the side of the planet the flight is heading to.
+      if (t > 0 && i === this.sun) this.faceSun(B.center);
+      // One smooth curve through all the resting eyes (centripetal Catmull–Rom), so the
+      // camera can fly straight past a stop without a kink; the ends pull away from the objects.
+      const e0 = i > 0 ? this.eyeAt(i - 1, this.e0) : this.e0.copy(A.center);
+      const e1 = this.eyeAt(i, this.e1), e2 = this.eyeAt(i + 1, this.e2);
+      const e3 = i + 2 <= this.last ? this.eyeAt(i + 2, this.e3) : this.e3.copy(B.center);
+      centripetal(e0, e1, e2, e3, t, cam.position);
       // Inside the solar system, fly over the Sun rather than through it.
       if (i + 1 <= this.lastSolar && i !== this.sun && i + 1 !== this.sun) {
         const S = this.placements[this.sun].center;
         const h = Math.hypot(cam.position.x - S.x, cam.position.z - S.z);
         cam.position.y += 4.5 * Math.exp(-((h / 4) ** 2));
       }
-      // Never pass through either object.
+      // Never pass through either object: inside twice the safety radius R the distance d is
+      // eased to R + d²/4R (smooth, and the identity outside), so the path bends round it.
       for (const k of [i, i + 1]) {
-        const minR = this.frames[k].min * 1.4;
+        const R = this.frames[k].min * 1.4;
         const v = this.tmp.subVectors(cam.position, this.placements[k].center);
-        if (v.length() < minR) cam.position.copy(this.placements[k].center).addScaledVector(v.normalize(), minR);
+        const d = v.length();
+        if (d < 2 * R) cam.position.copy(this.placements[k].center).addScaledVector(v.normalize(), R + (d * d) / (4 * R));
       }
-      // Turn towards where the flight is heading early, while still close to the stop
-      // being left, then fly facing it. The turn interpolates yaw and pitch, and keeps the
-      // same turning direction for the whole leg, so it never flips half-way.
+      // Look at the object being passed, then turn towards where the flight is heading.
+      // The turn interpolates yaw and pitch and stays continuous past ±180°.
       const ahead = this.target >= p;
       const look = ahead ? smoothstep(clamp01((t - 0.03) / 0.6)) : 1 - smoothstep(clamp01((0.97 - t) / 0.6));
       const targetA = anchorA ? A.center.clone().add(anchorA.target) : A.center;
@@ -355,7 +427,12 @@ export class Tour {
       const bank = Math.sin(Math.PI * t) * 0.07 * turn;
       this.wantQuat.multiply(this.lookQ.setFromAxisAngle(this.tmp2.set(0, 0, 1), -bank));
       // The camera turns with a little lag, like a hand-held one, never instantly.
-      cam.quaternion.slerp(this.wantQuat, 1 - Math.exp(-dt * 5));
+      // Its turn rate is also capped, so passing close by a small planet never whips it round.
+      const gapAngle = cam.quaternion.angleTo(this.wantQuat);
+      if (gapAngle > 1e-6) {
+        const step = Math.min(gapAngle * (1 - Math.exp(-dt * 5)), 1.6 * dt);
+        cam.quaternion.slerp(this.wantQuat, step / gapAngle);
+      }
       cam.up.set(0, 1, 0);
 
       const forwardLeg = this.target >= p;
@@ -372,13 +449,12 @@ export class Tour {
         radius: a.radius + (b.radius - a.radius) * t,
         threshold: a.threshold + (b.threshold - a.threshold) * t,
       });
-      if (this.progress === this.target && Number.isInteger(this.target)) this.settle(this.target);
-    } else {
-      this.restTime += dt;
-      if (this.autoplay && this.restTime > this.dwell) {
-        if (this.index < this.last) this.goTo(this.index + 1);
-        else this.autoplay = false;
+      if (this.progress === this.target && Number.isInteger(this.target)) {
+        if (this.autoplay) this.autoplay = false;
+        this.settle(this.target);
       }
+    } else {
+      if (this.autoplay) this.target = this.last;
       // Ease from the pose the flight arrived with into the resting view.
       if (this.arriveBlend > 0) {
         this.arriveBlend = Math.max(0, this.arriveBlend - dt / 0.9);
@@ -430,6 +506,10 @@ export class Tour {
     }
 
     this.shownQuat.copy(cam.quaternion);
+    if (this.current !== this.nearest) {
+      this.nearest = this.current;
+      this.events.near(this.nearest);
+    }
 
     // The black hole (if any is drawn) lives in the sky shader.
     const hole = visible.filter((i) => this.stops[i].kind === 'blackhole')
