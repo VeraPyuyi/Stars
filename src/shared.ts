@@ -7,4 +7,8 @@ import * as THREE from 'three';
 export const pixelScale: THREE.IUniform<number> = { value: 800 };
 
 /** Drawing-buffer resolution shared by all fat-line (Line2) materials. */
+/** Ray-march sample count for volumetric effects, set by the quality setting. */
+export const volumeSamples: THREE.IUniform<number> = { value: 80 };
+
+/** Drawing-buffer resolution shared by all fat-line (Line2) materials. */
 export const lineResolution = new THREE.Vector2(1, 1);

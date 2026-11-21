@@ -81,33 +81,33 @@ export const STAR_PRESETS: Preset[] = [
 export const PULSAR_PRESETS: Preset[] = [
   {
     id: 'crab', name: '蟹状星云脉冲星 Crab',
-    values: { alpha: 50, spin: 3, sparks: 12, drift: 0.3, core: 1.0 },
+    values: { alpha: 50, period: Math.log10(33.7), spin: 3, sparks: 12, drift: 0.3, core: 1.0 },
     facts: [['编号', 'PSR B0531+21'], ['周期', '33.7 ms（每秒约 30 转）'], ['年龄', '约 970 年（公元 1054 年超新星）'], ['距离', '≈6500 光年'], ['表面磁场', '≈4×10⁸ T'], ['磁倾角 α', '≈45–60°（模型估计）']],
     note: '少数能在可见光波段看到脉冲的脉冲星。射电轮廓有主脉冲和相隔约 145° 的中间脉冲。',
   },
   {
     id: 'vela', name: '船帆座脉冲星 Vela',
-    values: { alpha: 60, spin: 2, sparks: 10, drift: 0.2, core: 1.2 },
+    values: { alpha: 60, period: Math.log10(89.3), spin: 2, sparks: 10, drift: 0.2, core: 1.2 },
     facts: [['编号', 'PSR B0833−45'], ['周期', '89.3 ms（每秒约 11 转）'], ['年龄', '≈11,000 年'], ['距离', '≈960 光年'], ['表面磁场', '≈3.4×10⁸ T'], ['磁倾角 α', '≈43–70°（模型估计）']],
     note: '以频繁的“自转突变”（glitch）闻名，也是天空中最亮的持续伽马射线源之一。',
   },
   {
     id: 'b1919', name: 'PSR B1919+21（第一颗脉冲星）',
-    values: { alpha: 30, spin: 0.6, sparks: 8, drift: 0.6, core: 0.4 },
+    values: { alpha: 30, period: Math.log10(1337), spin: 0.6, sparks: 8, drift: 0.6, core: 0.4 },
     facts: [['周期', '1.337 s'], ['发现', '1967 年，Jocelyn Bell Burnell'], ['距离', '≈1000 光年'], ['表面磁场', '≈1.4×10⁸ T'], ['磁倾角 α', '未精确测定（此处取 30°）']],
     note: '有明显的“漂移子脉冲”：单个脉冲里的子结构逐周期平移，被解释为火花在磁极附近绕磁轴旋转。',
   },
   {
     id: 'b0943', name: 'PSR B0943+10（火花“旋转木马”）',
-    values: { alpha: 15, spin: 0.7, sparks: 20, drift: 0.4, core: 0.2 },
+    values: { alpha: 15, period: Math.log10(1098), spin: 0.7, sparks: 20, drift: 0.4, core: 0.2 },
     facts: [['周期', '1.098 s'], ['火花数', '20 个，约 37 个周期绕磁轴转一圈'], ['磁倾角 α', '≈11–15°（近乎对齐）']],
     note: 'Deshpande & Rankin (1999) 从漂移子脉冲中重建出 20 个火花组成的环——这是“旋转木马”模型最著名的证据。',
   },
   {
     id: 'j1748', name: 'PSR J1748−2446ad（转得最快）',
-    values: { alpha: 40, spin: 6, sparks: 0, drift: 0, core: 1.0 },
+    values: { alpha: 40, period: Math.log10(1.396), spin: 6, sparks: 0, drift: 0, core: 1.0 },
     facts: [['周期', '1.396 ms（每秒 716 转）'], ['位置', '球状星团 Terzan 5'], ['距离', '≈18,000 光年'], ['类型', '毫秒脉冲星（被伴星吸积“加速”）']],
-    note: '赤道线速度约为光速的 24%。毫秒脉冲星磁场弱得多（≈10⁴–10⁵ T），但计时极其稳定。',
+    note: '赤道线速度约为光速的 24%，光速圆柱半径只有约 67 km，所以光束的快照被光传播延迟卷成明显的螺旋，闭合磁力线也被压缩在很小的区域里。毫秒脉冲星磁场弱得多（≈10⁴–10⁵ T），但计时极其稳定。',
   },
 ];
 

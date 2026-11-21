@@ -6,11 +6,11 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import './style.css';
 import { Sky } from './sky';
-import { lineResolution, pixelScale } from './shared';
+import { lineResolution, pixelScale, volumeSamples } from './shared';
 import type { Param, Preset, SimObject } from './types';
 import { createStar } from './objects/star';
 import { createPlanet } from './objects/planet';
-import { createNeutronStar, createPulsar } from './objects/compact';
+import { createPulsar } from './objects/pulsar';
 import { createBlackHole } from './objects/blackHole';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -42,10 +42,10 @@ composer.addPass(new OutputPass());
 
 // ---------- quality ----------
 type Quality = 'standard' | 'high' | 'ultra';
-const QUALITY: Record<Quality, { ratio: number; steps: number }> = {
-  standard: { ratio: 1, steps: 300 },
-  high: { ratio: Math.min(window.devicePixelRatio, 2), steps: 500 },
-  ultra: { ratio: Math.min(window.devicePixelRatio * 1.5, 3), steps: 900 },
+const QUALITY: Record<Quality, { ratio: number; steps: number; samples: number }> = {
+  standard: { ratio: 1, steps: 300, samples: 48 },
+  high: { ratio: Math.min(window.devicePixelRatio, 2), steps: 500, samples: 80 },
+  ultra: { ratio: Math.min(window.devicePixelRatio * 1.5, 3), steps: 900, samples: 128 },
 };
 let quality: Quality = 'high';
 
@@ -59,11 +59,12 @@ function resize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   sky.uniforms.uSteps.value = q.steps;
+  volumeSamples.value = q.samples;
   pixelScale.value = (h * q.ratio) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
   lineResolution.set(w * q.ratio, h * q.ratio);
 }
 
-const objects: SimObject[] = [createStar(), createPlanet(), createNeutronStar(), createPulsar(), createBlackHole(sky)];
+const objects: SimObject[] = [createStar(), createPlanet(), createPulsar(), createBlackHole(sky)];
 let current: SimObject = objects[0];
 
 // ---------- UI ----------

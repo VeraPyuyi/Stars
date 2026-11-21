@@ -2,11 +2,11 @@
 
 > When you are depressed, just see the stars
 
-在浏览器里实时渲染**恒星、行星、中子星、脉冲星和黑洞**，力求在物理上“说得通”，并且可以用鼠标/触屏拖动旋转、缩放查看。
+在浏览器里实时渲染**恒星、行星、脉冲星和黑洞**，力求在物理上“说得通”，并且可以用鼠标/触屏拖动旋转、缩放查看。
 
 **在线预览：https://verapyuyi.github.io/Stars/**
 
-A physically-inspired, interactive WebGL renderer for stars, planets, neutron stars, pulsars and black holes. Runs in any modern browser — no install needed.
+A physically-inspired, interactive WebGL renderer for stars, planets, pulsars and black holes. Runs in any modern browser — no install needed.
 
 ![screenshots](docs/screenshots.jpg)
 
@@ -16,8 +16,7 @@ A physically-inspired, interactive WebGL renderer for stars, planets, neutron st
 | --- | --- |
 | 恒星 | 黑体辐射颜色（2500–40000 K，自动显示光谱型）、临边昏暗、米粒组织、星斑、光斑、日冕光晕 |
 | 行星 | 类地行星（程序生成大陆/海洋/冰盖、海面高光、云层、夜面城市灯光、指数大气散射边缘）；气态巨行星（纬向云带、风暴涡旋、带行星投影的光环） |
-| 中子星 | 10⁶ K 蓝白色表面、磁极热斑、偶极磁力线 |
-| 脉冲星 | 体积光线步进的辐射束：核心 + 空心锥 + 外锥，绕磁轴旋转的“火花旋转木马”（漂移子脉冲）、沿开放磁力线外流的等离子体粒子、实时**脉冲轮廓**图（主脉冲 / 中间脉冲 / 锥双峰） |
+| 脉冲星 | 10⁶ K 中子星表面与磁极热斑；体积光线步进的辐射束（核心 + 空心锥 + 外锥，“火花旋转木马”漂移子脉冲），按真实周期计算**光速圆柱**与光行时延，毫秒脉冲星的光束弯成阿基米德螺旋；光束扫过视线时出现短促的衍射星芒闪光；实时**脉冲轮廓**图与占空比 |
 | 黑洞 | 逐像素**史瓦西测地线光线追踪**：事件视界阴影、光子环、吸积盘引力透镜、背景星空畸变、相对论多普勒集束与引力红移 |
 
 ### 知名天体预设（真实观测数据）
@@ -37,8 +36,8 @@ A physically-inspired, interactive WebGL renderer for stars, planets, neutron st
 ### 画质与细节
 
 - 多重采样抗锯齿的 HDR 后期管线，画质三档（标准 / 高 / 极致超采样）。
-- 恒星表面用 Voronoi 细胞噪声生成米粒组织（亮的上升流 + 暗的下沉通道），细节随缩放逐级出现；红超巨星有“巨型元胞 + 小元胞”的层级结构。
-- 粒子：恒星日珥（沿磁弧流动的 Hα 等离子体）、帕克螺旋星风；脉冲星沿开放磁力线外流的带拖尾粒子；中子星磁层里在镜点间来回弹跳的被俘粒子。
+- 恒星按像素做解析光线–球求交（不再是三角网格），轮廓与法线完全光滑，没有多边形剖分痕迹；表面用带域扭曲的 Voronoi 细胞噪声生成米粒组织（亮的上升流 + 暗的下沉通道），细节随缩放逐级出现；红超巨星有“巨型元胞 + 小元胞”的层级结构。
+- 粒子：恒星日珥（沿磁弧流动的 Hα 等离子体）、帕克螺旋星风；脉冲星沿开放磁力线外流的带拖尾粒子；磁层里在镜点间来回弹跳的被俘粒子（超出光速圆柱的闭合磁力线自动消失）。
 - 磁力线为抗锯齿粗线；行星地形有凹凸光照；黑洞测地线改用蛙跳积分。
 
 ![detail](docs/detail.jpg)
@@ -66,7 +65,7 @@ src/
   main.ts            渲染器、相机控制、UI
   sky.ts             全屏背景：程序星空 / 黑洞光线追踪
   shaders/common.ts  噪声、黑体颜色等共享 GLSL
-  objects/           各类天体（star / planet / compact / blackHole / glow）
+  objects/           各类天体（star / planet / pulsar / blackHole / glow / flare）
 ```
 
 ## 物理近似说明
@@ -77,12 +76,12 @@ src/
 - 恒星表面纹理是程序噪声，不是磁流体模拟。
 - 大气为单次散射的解析近似。
 - 黑洞为不自旋的史瓦西黑洞，吸积盘为几何薄盘。
-- 中子星暂未考虑引力光线弯曲。
+- 脉冲星表面暂未考虑引力光线弯曲；光束为几何模型，不是等离子体模拟。
 
 ## 路线图
 
 - [ ] 克尔（自旋）黑洞与更真实的吸积盘（体积、喷流）
-- [ ] 中子星引力光线弯曲（可见超过半个表面）
+- [ ] 脉冲星表面引力光线弯曲（可见超过半个表面）
 - [x] 基于真实数据的预设
 - [ ] 白矮星（天狼星 B）、行星预设（太阳系行星）
 - [ ] 真实星表背景（如 Hipparcos / Gaia 亮星）
