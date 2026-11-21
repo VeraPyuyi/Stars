@@ -17,6 +17,18 @@ export interface TourStop {
   orbit?: { au: number; years: number };
   /** Sidereal rotation period in hours (negative: retrograde), if known. */
   rotHours?: number;
+  /** Known planets of another star, drawn simply (sizes and orbits not to scale). */
+  companions?: Companion[];
+}
+
+export interface Companion {
+  name: string;
+  /** Orbit radius and planet radius in world units (the star's radius is 1). */
+  r: number;
+  scale: number;
+  /** Displayed orbital period (s) and the planet's look (planet parameters). */
+  seconds: number;
+  values: Record<string, number | string>;
 }
 
 const AU_LY = 1.581e-5;
@@ -61,7 +73,7 @@ const BELT: Preset = {
 };
 
 /** Distances are rounded literature values; several (Deneb, the pulsars) are uncertain by tens of percent. */
-type Raw = [StopKind, Preset, number, Partial<Pick<TourStop, 'scale' | 'orbit' | 'rotHours'>>?];
+type Raw = [StopKind, Preset, number, Partial<Pick<TourStop, 'scale' | 'orbit' | 'rotHours' | 'companions'>>?];
 const RAW: Raw[] = [
   // The solar system, from the Sun outwards (distance = from the Sun).
   ['star', find(STAR_PRESETS, 'sun'), 0, { rotHours: 609 }],
@@ -75,7 +87,14 @@ const RAW: Raw[] = [
   ['planet', URANUS, 19.2 * AU_LY, { scale: 0.5, orbit: { au: 19.2, years: 84 }, rotHours: -17.2 }],
   ['planet', NEPTUNE, 30.1 * AU_LY, { scale: 0.48, orbit: { au: 30.1, years: 164.8 }, rotHours: 16.1 }],
   // Beyond: stars, pulsars and black holes by distance from Earth.
-  ['star', find(STAR_PRESETS, 'proxima'), 4.24, { rotHours: 83 * 24 }],
+  ['star', find(STAR_PRESETS, 'proxima'), 4.24, {
+    rotHours: 83 * 24,
+    // Proxima b (11.2 d) and d (5.1 d): probably rocky; periods keep their real ratio.
+    companions: [
+      { name: '比邻星 b', r: 3.1, scale: 0.11, seconds: 26, values: { type: 'mars', seed: 41 } },
+      { name: '比邻星 d', r: 2.1, scale: 0.07, seconds: 26 * (5.12 / 11.19), values: { type: 'mercury', seed: 7 } },
+    ],
+  }],
   ['star', find(STAR_PRESETS, 'sirius'), 8.6, { rotHours: 130 }],
   ['star', find(STAR_PRESETS, 'altair'), 16.7, { rotHours: 9 }],
   ['star', find(STAR_PRESETS, 'vega'), 25, { rotHours: 12.5 }],
