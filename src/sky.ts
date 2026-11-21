@@ -13,6 +13,7 @@ precision highp float;
 varying vec2 vUv;
 uniform mat4 uInvViewProj;
 uniform vec3 uCamPos;
+uniform vec3 uHolePos;
 uniform float uTime;
 uniform int uMode;
 uniform float uDiskInner;
@@ -100,12 +101,22 @@ vec4 disk(vec3 hit, vec3 rayDir){
 }
 
 void main(){
+  // uInvViewProj has no translation (camera at the origin), so the direction stays
+  // precise however far from the world origin the camera is.
   vec4 wp = uInvViewProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
-  vec3 dir = normalize(wp.xyz / wp.w - uCamPos);
+  vec3 dir = normalize(wp.xyz / wp.w);
 
   if (uMode == 0) { gl_FragColor = vec4(sky(dir), 1.0); return; }
 
-  vec3 pos = uCamPos;
+  vec3 pos = uCamPos - uHolePos;
+  // Far from the hole, bending is tiny: fly straight to a sphere of 60 r_s, or escape at once.
+  float rc = length(pos);
+  if (rc > 60.0) {
+    float bb = dot(pos, dir);
+    float disc = bb * bb - (rc * rc - 3600.0);
+    if (bb > 0.0 || disc < 0.0) { gl_FragColor = vec4(sky(dir), 1.0); return; }
+    pos += dir * (-bb - sqrt(disc));
+  }
   vec3 vel = dir;
   vec3 h = cross(pos, vel);
   float h2 = dot(h, h);
@@ -146,6 +157,7 @@ export class Sky {
   uniforms = {
     uInvViewProj: { value: new THREE.Matrix4() },
     uCamPos: { value: new THREE.Vector3() },
+    uHolePos: { value: new THREE.Vector3() },
     uTime: { value: 0 },
     uMode: { value: 0 },
     uDiskInner: { value: 3.0 },
@@ -156,6 +168,7 @@ export class Sky {
     uSteps: { value: 400 },
   };
   private m = new THREE.Matrix4();
+  private rot = new THREE.Matrix4();
 
   constructor() {
     const mat = new THREE.ShaderMaterial({
@@ -172,7 +185,8 @@ export class Sky {
 
   update(camera: THREE.PerspectiveCamera, time: number) {
     camera.updateMatrixWorld();
-    this.m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).invert();
+    this.rot.copy(camera.matrixWorldInverse).setPosition(0, 0, 0);
+    this.m.multiplyMatrices(camera.projectionMatrix, this.rot).invert();
     this.uniforms.uInvViewProj.value.copy(this.m);
     this.uniforms.uCamPos.value.copy(camera.position);
     this.uniforms.uTime.value = time;

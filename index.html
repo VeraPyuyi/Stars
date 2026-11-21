@@ -7,14 +7,21 @@
   </head>
   <body>
     <canvas id="view"></canvas>
-    <aside id="panel">
+    <header id="modes">
       <h1>Stars</h1>
+      <button data-mode="tour">真实天体漫游</button>
+      <button data-mode="custom">自定义模拟</button>
+    </header>
+    <aside id="panel">
       <nav id="objects"></nav>
       <section id="params"></section>
       <section id="global"></section>
       <section id="info"></section>
     </aside>
-    <div id="hint">左键拖动：旋转 · 滚轮：缩放 · 右键拖动：平移</div>
+    <div id="hint">
+      <span class="custom-only">左键拖动：旋转 · 滚轮：缩放 · 右键拖动：平移</span>
+      <span class="tour-only">滚轮 / ← → 切换天体 · 拖动旋转 · Ctrl + 滚轮缩放 · 空格 自动漫游</span>
+    </div>
     <div id="fps"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

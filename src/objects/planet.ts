@@ -89,7 +89,11 @@ export function createPlanet(): SimObject {
           vec3 R1 = cross(dpdy, N), R2 = cross(N, dpdx);
           float det = dot(dpdx, R1);
           vec3 grad = sign(det) * (dhdx * R1 + dhdy * R2);
-          N = normalize(abs(det) * N - 0.06 * grad);
+          // Slope limited, and eased off right at the terminator, where per-pixel
+          // derivatives would otherwise flip whole 2×2 pixel blocks between lit and dark.
+          vec3 g = 0.06 * grad / max(abs(det), 1e-12);
+          g /= max(1.0, length(g) / 0.35);
+          N = normalize(N - g * smoothstep(-0.05, 0.35, dot(N, uSun)));
         }
         float NL = dot(N, uSun);
         float diff = max(NL, 0.0);
@@ -139,8 +143,11 @@ export function createPlanet(): SimObject {
     `,
   });
 
+  // World position of the planet's centre (it is not at the origin during the tour).
+  const center = { value: new THREE.Vector3() };
   const atmoUniforms = {
     uSun: uniforms.uSun,
+    uCenter: center,
     uScale: { value: 0.018 },
     uRayleigh: { value: new THREE.Color(0.28, 0.55, 1.0) },
     uStrength: { value: 1.4 },
@@ -155,10 +162,10 @@ export function createPlanet(): SimObject {
     vertexShader: COMMON_VERT,
     fragmentShader: /* glsl */ `
       varying vec3 vObj; varying vec3 vWorldN; varying vec3 vWorldPos;
-      uniform vec3 uSun; uniform float uScale; uniform vec3 uRayleigh; uniform float uStrength;
+      uniform vec3 uSun; uniform float uScale; uniform vec3 uRayleigh; uniform float uStrength; uniform vec3 uCenter;
       void main(){
-        vec3 ro = cameraPosition;
-        vec3 rd = normalize(vWorldPos - ro);
+        vec3 ro = cameraPosition - uCenter;          // planet-centred coordinates
+        vec3 rd = normalize(vWorldPos - cameraPosition);
         float tc = -dot(ro, rd);
         vec3 closest = ro + rd * tc;
         float b = length(closest);
@@ -176,7 +183,7 @@ export function createPlanet(): SimObject {
     `,
   });
 
-  const ringUniforms = { uSun: uniforms.uSun };
+  const ringUniforms = { uSun: uniforms.uSun, uCenter: center };
   const rings = new THREE.ShaderMaterial({
     uniforms: ringUniforms,
     transparent: true,
@@ -193,7 +200,7 @@ export function createPlanet(): SimObject {
     `,
     fragmentShader: /* glsl */ `
       varying vec3 vLocal; varying vec3 vWorldPos;
-      uniform vec3 uSun;
+      uniform vec3 uSun; uniform vec3 uCenter;
       ${NOISE}
       void main(){
         float r = length(vLocal.xy);
@@ -202,7 +209,7 @@ export function createPlanet(): SimObject {
         dens *= smoothstep(1.35, 1.45, r) * (1.0 - smoothstep(2.25, 2.35, r));
         dens *= 1.0 - 0.85 * smoothstep(1.92, 1.95, r) * (1.0 - smoothstep(2.0, 2.03, r)); // Cassini-like gap
         // Planet shadow on the rings.
-        vec3 P = vWorldPos;
+        vec3 P = vWorldPos - uCenter;
         float t = -dot(P, uSun);
         float shadow = (t > 0.0 && length(P + uSun * t) < 1.0) ? 0.05 : 1.0;
         vec3 c = vec3(0.82, 0.74, 0.6) * (0.6 + 0.4 * dens) * shadow * 1.6;
@@ -258,7 +265,9 @@ export function createPlanet(): SimObject {
       <p><b>大气</b>按指数大气计算视线柱密度：边缘更厚更亮；瑞利散射使其偏蓝，晨昏线附近偏红；逆光时有前向散射亮边。</p>
       <p><b>海洋</b>有太阳镜面反光；气态巨行星有纬向云带、风暴涡旋，光环会被行星投影。</p>
       <p class="approx">近似：未做多次散射与真实地形高度；云层无体积。</p>`,
+    setLightDir(d) { uniforms.uSun.value.copy(d).normalize(); },
     update(dt, time) {
+      group.getWorldPosition(center.value);
       uniforms.uTime.value = time;
       body.rotation.y += spin * dt * 0.3;
       cloudMesh.rotation.y += spin * dt * 0.36;
