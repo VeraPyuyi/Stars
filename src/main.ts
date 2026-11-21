@@ -7,7 +7,10 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import './style.css';
 import { Sky } from './sky';
 import { lineResolution, pixelScale, volumeSamples } from './shared';
-import type { Param, Preset, SimObject } from './types';
+import type { Param, SimObject } from './types';
+import { TOUR_STOPS, type StopKind } from './tour/stops';
+import { Tour, applyValues } from './tour/tour';
+import { TourUI } from './tour/ui';
 import { createStar } from './objects/star';
 import { createPlanet } from './objects/planet';
 import { createPulsar } from './objects/pulsar';
@@ -57,6 +60,14 @@ function resize() {
   composer.setPixelRatio(q.ratio);
   composer.setSize(w, h);
   camera.aspect = w / h;
+  // In the tour the object rests right of centre (the story is on the left), or above
+  // the card on narrow screens: a lens shift, so orbiting still turns about the object.
+  if (mode === 'tour') {
+    const wide = THREE.MathUtils.clamp((w / h - 1.15) / 0.55, 0, 1);
+    camera.setViewOffset(w, h, -w * 0.15 * wide, w / h < 0.9 ? h * 0.16 : 0, w, h);
+  } else {
+    camera.clearViewOffset();
+  }
   camera.updateProjectionMatrix();
   sky.uniforms.uSteps.value = q.steps;
   volumeSamples.value = q.samples;
@@ -122,89 +133,47 @@ const qualityParam: Param = { kind: 'select', key: 'quality', label: '画质', v
 const bloomParam: Param = { kind: 'range', key: 'bloom', label: '辉光强度', min: 0, max: 2, step: 0.05, value: 0.6,
   onChange: (v) => (bloom.strength = v) };
 
-function applyPreset(obj: SimObject, preset: Preset) {
-  for (const p of obj.params) {
-    if (!(p.key in preset.values)) continue;
-    const v = preset.values[p.key];
-    p.value = v as never;
-    (p.onChange as (x: typeof v) => void)(v);
-  }
-  if (preset.view) {
-    const d = new THREE.Vector3(...preset.view).normalize();
-    camera.position.copy(d.multiplyScalar(camera.position.length()));
-    controls.target.set(0, 0, 0);
-  }
-}
+// ---------- custom mode: free parameters, no real-object presets ----------
+const customRoot = new THREE.Group();
 
-function renderFacts(preset: Preset | undefined): string {
-  if (!preset) return '';
-  const rows = preset.facts.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('');
-  return `<div class="facts"><div class="facts-title">${preset.name}</div><table>${rows}</table>` +
-    (preset.note ? `<p>${preset.note}</p>` : '') + '</div>';
-}
-
-function renderPanel(obj: SimObject, preset?: Preset) {
+function renderPanel(obj: SimObject) {
   const params = $('params');
   params.innerHTML = `<h2>${obj.name} · 参数</h2>`;
-  let presetSelect: HTMLSelectElement | undefined;
-  const facts = document.createElement('div');
-  if (obj.presets?.length) {
-    const row = document.createElement('div');
-    row.className = 'row';
-    const label = document.createElement('label');
-    label.textContent = '知名天体（真实数据）';
-    presetSelect = document.createElement('select');
-    presetSelect.add(new Option('自定义', ''));
-    for (const pr of obj.presets) presetSelect.add(new Option(pr.name, pr.id, false, pr.id === preset?.id));
-    presetSelect.addEventListener('change', () => {
-      const pr = obj.presets!.find((x) => x.id === presetSelect!.value);
-      if (pr) applyPreset(obj, pr);
-      renderPanel(obj, pr);
-    });
-    row.append(label, presetSelect);
-    params.append(row);
-    facts.innerHTML = renderFacts(preset);
-    params.append(facts);
-  }
-  // Touching any slider turns the selection back into a custom object.
-  const onUser = () => {
-    if (presetSelect && presetSelect.value) { presetSelect.value = ''; facts.innerHTML = ''; setHash(obj); }
-  };
-  obj.params.forEach((p) => params.append(renderParam(p, onUser)));
+  obj.params.forEach((p) => params.append(renderParam(p)));
   if (obj.extraUI) params.append(obj.extraUI());
-  setHash(obj, preset);
 }
 
-function setHash(obj: SimObject, preset?: Preset) {
-  history.replaceState(null, '', `#${obj.id}${preset ? '/' + preset.id : ''}`);
-}
-
-function select(obj: SimObject, presetId?: string) {
-  scene.remove(current.group);
+function select(obj: SimObject) {
+  customRoot.remove(current.group);
   current = obj;
-  scene.add(obj.group);
+  customRoot.add(obj.group);
+  // Re-apply the panel's values: the sky's black-hole uniforms are shared with the tour.
+  for (const p of obj.params) (p.onChange as (v: typeof p.value) => void)(p.value);
   sky.uniforms.uMode.value = obj.skyMode === 'blackhole' ? 1 : 0;
+  sky.uniforms.uHolePos.value.set(0, 0, 0);
 
   controls.minDistance = obj.camera.min;
   controls.maxDistance = obj.camera.max;
-  const dir = camera.position.clone().normalize();
-  if (dir.lengthSq() === 0) dir.set(0, 0.2, 1).normalize();
-  camera.position.copy(dir.multiplyScalar(obj.camera.distance));
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  if (!Number.isFinite(dir.x) || dir.lengthSq() === 0) dir.set(0, 0.2, 1).normalize();
   controls.target.set(0, 0, 0);
+  camera.position.copy(dir.multiplyScalar(obj.camera.distance));
 
-  bloom.strength = obj.bloom.strength;
-  bloom.radius = obj.bloom.radius;
-  bloom.threshold = obj.bloom.threshold;
-  bloomParam.value = obj.bloom.strength;
-
+  setBloom(obj.bloom);
   document.querySelectorAll<HTMLButtonElement>('#objects button').forEach((b) => b.classList.toggle('active', b.dataset.id === obj.id));
-  const preset = obj.presets?.find((p) => p.id === presetId);
-  if (preset) applyPreset(obj, preset);
-  renderPanel(obj, preset);
+  renderPanel(obj);
   const global = $('global');
   global.innerHTML = '<h2>画面</h2>';
   global.append(renderParam(qualityParam), renderParam(exposure), renderParam(bloomParam));
   $('info').innerHTML = `<h2>物理说明</h2>${obj.info}`;
+  history.replaceState(null, '', `#custom/${obj.id}`);
+}
+
+function setBloom(b: SimObject['bloom']) {
+  bloom.strength = b.strength;
+  bloom.radius = b.radius;
+  bloom.threshold = b.threshold;
+  bloomParam.value = b.strength;
 }
 
 for (const obj of objects) {
@@ -215,10 +184,131 @@ for (const obj of objects) {
   $('objects').append(b);
 }
 
-scene.add(current.group);
+// ---------- tour mode: real objects, one route from Earth outwards ----------
+const factories: Record<StopKind, () => SimObject> = {
+  planet: createPlanet,
+  star: createStar,
+  pulsar: createPulsar,
+  blackhole: () => createBlackHole(sky),
+};
+let tour: Tour | null = null;
+let tourUI: TourUI | null = null;
+type Mode = 'tour' | 'custom';
+let mode: Mode = 'tour';
+
+function ensureTour() {
+  if (tour && tourUI) return { tour, ui: tourUI };
+  const ui = new TourUI(TOUR_STOPS, {
+    go: (i) => t.goTo(i),
+    next: () => t.next(),
+    prev: () => t.prev(),
+    toggleAuto: () => { t.autoplay = !t.autoplay; ui.setAutoplay(t.autoplay); if (t.autoplay && !t.trip) t.next(); },
+    openCustom: (i) => openInCustom(i),
+  });
+  const t = new Tour(camera, controls, sky, factories, {
+    arrive: (i) => {
+      ui.arrive(i, t.object(i));
+      ui.setAutoplay(t.autoplay);
+      if (mode === 'tour') history.replaceState(null, '', `#tour/${TOUR_STOPS[i].id}`);
+    },
+    depart: (from, to, seconds) => ui.depart(from, to, seconds),
+    progress: (ly, p, from, to) => ui.progress(ly, p, from, to),
+    bloom: setBloom,
+  });
+  document.body.append(ui.el);
+  tour = t;
+  tourUI = ui;
+  return { tour: t, ui };
+}
+
+function setMode(m: Mode) {
+  mode = m;
+  document.body.dataset.mode = m;
+  document.querySelectorAll<HTMLButtonElement>('#modes button').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
+  if (m === 'tour') {
+    scene.remove(customRoot);
+    const { tour: t } = ensureTour();
+    scene.add(t.root);
+    controls.enableZoom = false;   // the wheel travels along the route, as on the homepage
+    camera.near = 0.02;
+    camera.far = 6000;
+  } else {
+    if (tour) { tour.dispose(); scene.remove(tour.root); }
+    scene.add(customRoot);
+    controls.enableZoom = true;
+    controls.enabled = true;
+    camera.near = 0.01;
+    camera.far = 1000;
+  }
+  resize();
+}
+
+function enterTour(stopId?: string) {
+  setMode('tour');
+  const i = Math.max(0, TOUR_STOPS.findIndex((s) => s.id === stopId));
+  tour!.place(i);
+}
+
+function enterCustom(objId?: string) {
+  setMode('custom');
+  select(objects.find((o) => o.id === objId) ?? current);
+}
+
+const KIND_TO_OBJECT: Record<StopKind, string> = { planet: 'planet', star: 'star', pulsar: 'pulsar', blackhole: 'blackhole' };
+
+/** Carry a real object's parameters into custom mode, where they can be changed freely. */
+function openInCustom(i: number) {
+  const stop = TOUR_STOPS[i];
+  const obj = objects.find((o) => o.id === KIND_TO_OBJECT[stop.kind])!;
+  if (tour) { tour.autoplay = false; tourUI?.setAutoplay(false); }
+  setMode('custom');
+  applyValues(obj, stop.preset.values);
+  select(obj);
+  if (stop.preset.view) {
+    camera.position.copy(new THREE.Vector3(...stop.preset.view).normalize().multiplyScalar(obj.camera.distance));
+  }
+}
+
+document.querySelectorAll<HTMLButtonElement>('#modes button').forEach((b) =>
+  b.addEventListener('click', () => {
+    if (b.dataset.mode === mode) return;
+    if (b.dataset.mode === 'tour') enterTour(tour ? TOUR_STOPS[tour.index].id : undefined);
+    else enterCustom();
+  }),
+);
+
+// Wheel / keys travel along the route; with Ctrl (trackpad pinch), Shift or Alt the wheel zooms.
+let wheelAcc = 0;
+canvas.addEventListener('wheel', (e) => {
+  if (mode !== 'tour' || !tour) return;
+  e.preventDefault();
+  if (e.ctrlKey || e.shiftKey || e.altKey) {
+    if (tour.trip) return;
+    const d = camera.position.clone().sub(controls.target);
+    const len = THREE.MathUtils.clamp(d.length() * Math.exp((e.deltaY || e.deltaX) * 0.0015), controls.minDistance, controls.maxDistance);
+    camera.position.copy(controls.target).addScaledVector(d.normalize(), len);
+    return;
+  }
+  if (tour.trip) { wheelAcc = 0; return; }
+  wheelAcc += e.deltaY;
+  if (wheelAcc > 80) { wheelAcc = 0; tour.next(); }
+  else if (wheelAcc < -80) { wheelAcc = 0; tour.prev(); }
+}, { passive: false });
+window.addEventListener('keydown', (e) => {
+  if (mode !== 'tour' || !tour || (e.target as HTMLElement).closest('input, select, textarea')) return;
+  if (e.key === 'ArrowRight' || e.key === 'PageDown') tour.next();
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') tour.prev();
+  else if (e.key === ' ') { e.preventDefault(); tourUI?.el.querySelector<HTMLButtonElement>('[data-a=auto]')?.click(); }
+});
+
 {
-  const [id, presetId] = location.hash.slice(1).split('/');
-  select(objects.find((o) => o.id === id) ?? objects[0], presetId);
+  const [a, b] = location.hash.slice(1).split('/');
+  const legacy = TOUR_STOPS.find((s) => s.id === b);
+  if (a === 'custom') enterCustom(b);
+  else if (a === 'tour') enterTour(b);
+  else if (legacy) enterTour(legacy.id);                 // old links such as #star/betelgeuse
+  else if (objects.some((o) => o.id === a)) enterCustom(a);
+  else enterTour();
 }
 
 // ---------- loop ----------
@@ -232,8 +322,13 @@ renderer.setAnimationLoop((now) => {
   timer.update(now);
   const dt = Math.min(timer.getDelta(), 0.1);
   const t = timer.getElapsed();
-  controls.update();
-  current.update(dt, t, camera);
+  if (mode === 'tour' && tour) {
+    if (!tour.trip) controls.update();
+    tour.update(dt, t);
+  } else {
+    controls.update();
+    current.update(dt, t, camera);
+  }
   sky.update(camera, t);
   composer.render();
   frames++; fpsTime += dt;
@@ -241,4 +336,4 @@ renderer.setAnimationLoop((now) => {
 });
 
 // Exposed for automated screenshots / debugging.
-(window as unknown as { __sim: unknown }).__sim = { camera, controls, select, objects, renderer, bloom };
+(window as unknown as { __sim: unknown }).__sim = { camera, controls, select, objects, renderer, bloom, get tour() { return tour; }, enterTour, enterCustom };

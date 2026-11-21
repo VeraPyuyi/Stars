@@ -33,5 +33,7 @@ export interface SimObject {
   presets?: Preset[];
   /** Extra widget appended under the parameters (e.g. pulse profile plot). */
   extraUI?: () => HTMLElement;
+  /** Direction towards the illuminating star (planets only). */
+  setLightDir?(dir: THREE.Vector3): void;
   update(dt: number, time: number, camera: THREE.PerspectiveCamera): void;
 }

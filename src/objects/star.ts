@@ -118,12 +118,14 @@ export function createStar(): SimObject {
   group.add(tilt);
   const body = new THREE.Mesh(new THREE.SphereGeometry(1.04, 64, 48), mat);
   tilt.add(body);
-  const prom = createProminences();
-  body.add(prom.points);
+  const prom = createProminences(uniforms.uCamLocal);
+  body.add(prom.mesh);
   const wind = createStellarWind();
   group.add(wind.points);
   const glow = new Glow(7);
   glow.uniforms.uIntensity.value = 0.35;
+  // Drawn before the star so the partially covered limb pixels blend over the halo, not black.
+  glow.mesh.renderOrder = -1;
   group.add(glow.mesh);
 
   let spin = 0.05;
@@ -146,7 +148,7 @@ export function createStar(): SimObject {
       { kind: 'range', key: 'oblate', label: '扁率 R赤/R极', min: 1, max: 1.35, step: 0.01, value: 1,
         format: (v) => v.toFixed(2), onChange: (v) => { uniforms.uOblate.value = v; body.scale.set(v, 1, v); } },
       { kind: 'range', key: 'spin', label: '自转速度（演示）', min: 0, max: 0.5, step: 0.01, value: spin, onChange: (v) => (spin = v) },
-      { kind: 'toggle', key: 'prom', label: '日珥（磁弧上的等离子体）', value: true, onChange: (v) => (prom.points.visible = v) },
+      { kind: 'toggle', key: 'prom', label: '日珥（磁弧上的等离子体）', value: true, onChange: (v) => (prom.mesh.visible = v) },
       { kind: 'toggle', key: 'wind', label: '星风粒子', value: true, onChange: (v) => (wind.points.visible = v) },
     ],
     presets: STAR_PRESETS,

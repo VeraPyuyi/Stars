@@ -236,6 +236,7 @@ export function createPulsar(): SimObject {
 
   // ---- pulse profile: what a distant observer along the current view direction would record ----
   const camDir = new THREE.Vector3();
+  const worldPos = new THREE.Vector3();
   const mAxis = new THREE.Vector3();
   const pole = [0, 0];
   const intensityAt = (psi: number) => {
@@ -330,7 +331,7 @@ export function createPulsar(): SimObject {
       flare.update(camera);
       group.updateMatrixWorld(true);
       shared.uCamLocal.value.copy(beam.worldToLocal(camera.position.clone()));
-      camDir.copy(camera.position).normalize();
+      camDir.copy(camera.position).sub(group.getWorldPosition(worldPos)).normalize();
       // The flash follows the beam profile at the current phase: short and sharp.
       const I = intensityAt(spinNode.rotation.y);
       flare.uniforms.uIntensity.value = Math.min(I, 2.5) * 0.9;
