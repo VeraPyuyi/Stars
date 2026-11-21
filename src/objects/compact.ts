@@ -1,31 +1,44 @@
 import * as THREE from 'three';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { lineResolution } from '../shared';
 import { BLACKBODY, NOISE } from '../shaders/common';
 import type { SimObject } from '../types';
 import { Glow } from './glow';
 import { PULSAR_PRESETS } from '../data/presets';
-import { BeamUniforms, boundingCone, beamProfile, createBeam, createParticles } from './pulsarBeam';
+import { BeamUniforms, boundingCone, beamProfile, createBeam, createParticles, createTrappedParticles } from './pulsarBeam';
+
+/** Anti-aliased, constant-pixel-width line (WebGL lines are always 1 px and aliased). */
+function fatLineMaterial(color: THREE.Color, opacity: number, width: number) {
+  const m = new LineMaterial({ color: color.getHex(), linewidth: width, transparent: true, opacity, depthWrite: false });
+  m.blending = THREE.AdditiveBlending;
+  m.uniforms.resolution.value = lineResolution;
+  return m;
+}
+function fatLine(pts: THREE.Vector3[], mat: LineMaterial) {
+  const g = new LineGeometry();
+  g.setPositions(pts.flatMap((p) => [p.x, p.y, p.z]));
+  const l = new Line2(g, mat);
+  l.computeLineDistances();
+  return l;
+}
 
 /** Dipole magnetic field lines r = L·sin²θ, magnetic axis along +y. */
 function fieldLines(): THREE.Group {
   const g = new THREE.Group();
-  const mat = new THREE.LineBasicMaterial({
-    color: new THREE.Color(0.35, 0.6, 1.0),
-    transparent: true,
-    opacity: 0.18,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  });
+  const mat = fatLineMaterial(new THREE.Color(0.35, 0.6, 1.0), 0.3, 1.6);
   for (const L of [1.8, 2.8, 4.5, 7.5]) {
     const th0 = Math.asin(Math.sqrt(1 / L));
     for (let k = 0; k < 8; k++) {
       const phi = (k / 8) * Math.PI * 2 + L;
       const pts: THREE.Vector3[] = [];
-      for (let i = 0; i <= 120; i++) {
-        const th = th0 + (Math.PI - 2 * th0) * (i / 120);
+      for (let i = 0; i <= 240; i++) {
+        const th = th0 + (Math.PI - 2 * th0) * (i / 240);
         const r = L * Math.sin(th) ** 2;
         pts.push(new THREE.Vector3(r * Math.sin(th) * Math.cos(phi), r * Math.cos(th), r * Math.sin(th) * Math.sin(phi)));
       }
-      g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+      g.add(fatLine(pts, mat));
     }
   }
   return g;
@@ -34,10 +47,7 @@ function fieldLines(): THREE.Group {
 /** Open field lines rising from the polar caps (the ones that feed the beams). */
 function openFieldLines(): THREE.Group {
   const g = new THREE.Group();
-  const mat = new THREE.LineBasicMaterial({
-    color: new THREE.Color(1.0, 0.6, 0.3), transparent: true, opacity: 0.3,
-    blending: THREE.AdditiveBlending, depthWrite: false,
-  });
+  const mat = fatLineMaterial(new THREE.Color(1.0, 0.6, 0.3), 0.45, 1.4);
   for (const L of [40, 120]) {
     for (let k = 0; k < 6; k++) {
       const phi = (k / 6) * Math.PI * 2 + L * 0.1;
@@ -50,7 +60,7 @@ function openFieldLines(): THREE.Group {
           if (r > 7) break;
           pts.push(new THREE.Vector3(r * Math.sin(th) * Math.cos(phi), sign * r * Math.cos(th), r * Math.sin(th) * Math.sin(phi)));
         }
-        g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+        if (pts.length > 1) g.add(fatLine(pts, mat));
       }
     }
   }
@@ -85,7 +95,7 @@ function surfaceMaterial() {
         float cap = smoothstep(0.9, 0.99, c);                 // polar caps heated by returning currents
         float n = fbm(p * 12.0 + vec3(uTime * 0.2), 4) * 0.5 + 0.5;
         float T = mix(30000.0, 40000.0, cap);                  // ~10^6 K saturates to blue-white
-        float I = (0.9 + 0.2 * n) * (0.75 + 0.25 * mu) * (1.6 + 4.0 * cap);
+        float I = (0.9 + 0.2 * n) * (0.7 + 0.3 * mu) * (1.0 + 2.5 * cap);
         gl_FragColor = vec4(blackbody(T) * I, 1.0);
       }
     `,
@@ -106,10 +116,12 @@ function buildCompact(pulsar: boolean): SimObject {
 
   const lines = fieldLines();
   magNode.add(lines);
+  const trapped = createTrappedParticles(pulsar ? 7000 : 9000);
+  magNode.add(trapped.points);
 
   const glow = new Glow(pulsar ? 9 : 7);
   glow.uniforms.uTemp.value = 40000;
-  glow.uniforms.uIntensity.value = 1.2;
+  glow.uniforms.uIntensity.value = 0.4;
   glow.uniforms.uStreaks.value = 0.3;
   group.add(glow.mesh);
 
@@ -155,6 +167,7 @@ function buildCompact(pulsar: boolean): SimObject {
     { kind: 'range', key: 'spin', label: pulsar ? '自转速度（慢放）' : '自转速度（演示）', min: 0, max: 6, step: 0.05, value: spin,
       onChange: (v) => (spin = v) },
     { kind: 'toggle', key: 'lines', label: '显示闭合磁力线', value: true, onChange: (v) => (lines.visible = v) },
+    { kind: 'toggle', key: 'trapped', label: '磁层被俘粒子', value: true, onChange: (v) => (trapped.points.visible = v) },
   ];
   if (pulsar) {
     params.push(
@@ -253,7 +266,7 @@ function buildCompact(pulsar: boolean): SimObject {
       requestAnimationFrame(drawProfile);
       return box;
     } : undefined,
-    bloom: { strength: pulsar ? 1.1 : 0.9, radius: 0.7, threshold: 0.8 },
+    bloom: { strength: pulsar ? 0.6 : 0.6, radius: 0.6, threshold: 0.9 },
     params,
     info: pulsar
       ? `
@@ -268,6 +281,7 @@ function buildCompact(pulsar: boolean): SimObject {
     update(dt, time, camera) {
       uniforms.uTime.value = time;
       shared.uTime.value = time;
+      trapped.uniforms.uTime.value = time;
       spinNode.rotation.y += spin * dt;
       glow.update(camera, time);
       let boost = 1;
@@ -276,11 +290,11 @@ function buildCompact(pulsar: boolean): SimObject {
         for (const b of beamSets) b.u.uCamLocal.value.copy(b.mesh.worldToLocal(camera.position.clone()));
         camDir.copy(camera.position).normalize();
         // Lighthouse effect: brightness follows the beam profile at the current phase.
-        boost = 1 + 3 * intensityAt(spinNode.rotation.y);
+        boost = 1 + 1.2 * intensityAt(spinNode.rotation.y);
         profileTimer += dt;
         if (profileTimer > 0.1) { profileTimer = 0; drawProfile(); }
       }
-      glow.uniforms.uIntensity.value = 1.2 * boost;
+      glow.uniforms.uIntensity.value = 0.4 * boost;
     },
   };
 }

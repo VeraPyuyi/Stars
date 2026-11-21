@@ -22,9 +22,6 @@ export function createBlackHole(sky: Sky): SimObject {
         onChange: (v) => (u.uDoppler.value = v) },
       { kind: 'range', key: 'bright', label: '吸积盘亮度', min: 0.5, max: 8, step: 0.1, value: u.uDiskBright.value,
         onChange: (v) => (u.uDiskBright.value = v) },
-      { kind: 'select', key: 'quality', label: '光线追踪质量', value: '400',
-        options: [ { value: '200', label: '低（200 步）' }, { value: '400', label: '中（400 步）' }, { value: '800', label: '高（800 步）' } ],
-        onChange: (v) => (u.uSteps.value = Number(v)) },
     ],
     info: `
       <p>每个像素的光线都沿<b>史瓦西时空的零测地线</b>反向积分（单位：史瓦西半径 r_s）。落入视界的光线为黑色，其余可能穿过吸积盘或逃逸到星空。</p>

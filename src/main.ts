@@ -6,6 +6,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import './style.css';
 import { Sky } from './sky';
+import { lineResolution, pixelScale } from './shared';
 import type { Param, Preset, SimObject } from './types';
 import { createStar } from './objects/star';
 import { createPlanet } from './objects/planet';
@@ -13,8 +14,7 @@ import { createNeutronStar, createPulsar } from './objects/compact';
 import { createBlackHole } from './objects/blackHole';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
@@ -31,11 +31,37 @@ controls.rotateSpeed = 0.6;
 const sky = new Sky();
 scene.add(sky.mesh);
 
-const composer = new EffectComposer(renderer);
+// HDR render target with multisampling: the post-processing chain otherwise
+// renders without anti-aliasing, which makes thin lines and limbs jagged.
+const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(renderer, target);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.6, 0.9);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
+
+// ---------- quality ----------
+type Quality = 'standard' | 'high' | 'ultra';
+const QUALITY: Record<Quality, { ratio: number; steps: number }> = {
+  standard: { ratio: 1, steps: 300 },
+  high: { ratio: Math.min(window.devicePixelRatio, 2), steps: 500 },
+  ultra: { ratio: Math.min(window.devicePixelRatio * 1.5, 3), steps: 900 },
+};
+let quality: Quality = 'high';
+
+function resize() {
+  const q = QUALITY[quality];
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setPixelRatio(q.ratio);
+  renderer.setSize(w, h);
+  composer.setPixelRatio(q.ratio);
+  composer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  sky.uniforms.uSteps.value = q.steps;
+  pixelScale.value = (h * q.ratio) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+  lineResolution.set(w * q.ratio, h * q.ratio);
+}
 
 const objects: SimObject[] = [createStar(), createPlanet(), createNeutronStar(), createPulsar(), createBlackHole(sky)];
 let current: SimObject = objects[0];
@@ -85,6 +111,13 @@ function renderParam(p: Param, onUser?: () => void): HTMLElement {
 
 const exposure: Param = { kind: 'range', key: 'exposure', label: '曝光', min: 0.2, max: 3, step: 0.05, value: 1,
   onChange: (v) => (renderer.toneMappingExposure = v) };
+const qualityParam: Param = { kind: 'select', key: 'quality', label: '画质', value: quality,
+  options: [
+    { value: 'standard', label: '标准（流畅优先）' },
+    { value: 'high', label: '高（默认）' },
+    { value: 'ultra', label: '极致（超采样，吃显卡）' },
+  ],
+  onChange: (v) => { quality = v as Quality; resize(); } };
 const bloomParam: Param = { kind: 'range', key: 'bloom', label: '辉光强度', min: 0, max: 2, step: 0.05, value: 0.6,
   onChange: (v) => (bloom.strength = v) };
 
@@ -169,7 +202,7 @@ function select(obj: SimObject, presetId?: string) {
   renderPanel(obj, preset);
   const global = $('global');
   global.innerHTML = '<h2>画面</h2>';
-  global.append(renderParam(exposure), renderParam(bloomParam));
+  global.append(renderParam(qualityParam), renderParam(exposure), renderParam(bloomParam));
   $('info').innerHTML = `<h2>物理说明</h2>${obj.info}`;
 }
 
@@ -188,12 +221,8 @@ scene.add(current.group);
 }
 
 // ---------- loop ----------
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  composer.setSize(window.innerWidth, window.innerHeight);
-});
+window.addEventListener('resize', resize);
+resize();
 
 const timer = new THREE.Timer();
 timer.connect(document);

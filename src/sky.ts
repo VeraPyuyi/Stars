@@ -88,7 +88,7 @@ vec4 disk(vec3 hit, vec3 rayDir){
   float omega = beta / r;
   float phi = atan(hit.z, hit.x) - omega * uTime * 3.0;
   vec3 q = vec3(cos(phi) * r * 0.5, sin(phi) * r * 0.5, r * 1.1);
-  float n = fbm(q, 4);
+  float n = fbm(q, 6) + 0.35 * fbm(q * vec3(2.5, 2.5, 4.0) + 7.0, 4);
   float dens = clamp(0.55 + 0.7 * n, 0.0, 1.0);
   dens *= smoothstep(uDiskInner, uDiskInner + 0.6, r) * (1.0 - smoothstep(uDiskOuter * 0.6, uDiskOuter, r));
 
@@ -112,18 +112,22 @@ void main(){
   vec3 col = vec3(0.0);
   float alpha = 0.0;
   bool captured = false;
+  float stepScale = 24.0 / float(uSteps);
+  vec3 acc = -1.5 * h2 * pos / pow(length(pos), 5.0);
   for (int i = 0; i < 1000; i++) {
     if (i >= uSteps) break;
     float r = length(pos);
     if (r < 1.0) { captured = true; break; }
     if (r > 80.0 && dot(pos, vel) > 0.0) break;
-    float dt = clamp(0.06 * (r - 0.9) * r, 0.012, 1.5);
+    float dt = clamp(stepScale * (r - 0.9) * r, 0.006, 1.5);
     vec3 prev = pos;
     // Photon geodesic in Schwarzschild space-time written as a Newtonian-like ODE:
     // d²x/dλ² = -3/2 · h² · x / r⁵  (exact for the orbit shape).
-    vec3 acc = -1.5 * h2 * pos / pow(r, 5.0);
-    vel += acc * dt;
+    // Integrated with kick-drift-kick leapfrog (2nd order, symplectic).
+    vel += acc * (0.5 * dt);
     pos += vel * dt;
+    acc = -1.5 * h2 * pos / pow(length(pos), 5.0);
+    vel += acc * (0.5 * dt);
     if (prev.y * pos.y < 0.0) {
       float t = prev.y / (prev.y - pos.y);
       vec4 d = disk(mix(prev, pos, t), vel);

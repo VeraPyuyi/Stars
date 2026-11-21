@@ -31,11 +31,16 @@ export function createPlanet(): SimObject {
       varying vec3 vObj; varying vec3 vWorldN; varying vec3 vWorldPos;
       uniform vec3 uSun; uniform int uType; uniform float uTime; uniform float uSea; uniform vec3 uSeed;
       ${NOISE}
-      vec3 rocky(vec3 p, vec3 N, vec3 V, out float ocean){
+      vec3 rocky(vec3 p, vec3 N, vec3 V, out float ocean, out float height){
         vec3 q = p + uSeed;
         // Domain-warped continents.
         vec3 w = vec3(fbm(q * 1.2, 3), fbm(q * 1.2 + 5.2, 3), fbm(q * 1.2 + 9.7, 3));
-        float h = fbm(q * 1.6 + w * 0.6, 7);
+        float h = fbm(q * 1.6 + w * 0.6, 8);
+        // Extra detail octaves fade in as the camera gets close (LOD by pixel footprint).
+        float px = length(fwidth(p));
+        h += fbm(q * 26.0 + w, 4) * 0.05 * (1.0 - smoothstep(0.02, 0.08, px * 26.0));
+        h += fbm(q * 110.0, 3) * 0.015 * (1.0 - smoothstep(0.02, 0.08, px * 110.0));
+        height = h;
         float lat = abs(p.y);
         ocean = step(h, uSea);
         float depth = clamp((uSea - h) * 4.0, 0.0, 1.0);
@@ -73,16 +78,27 @@ export function createPlanet(): SimObject {
         vec3 p = normalize(vObj);
         vec3 N = normalize(vWorldN);
         vec3 V = normalize(cameraPosition - vWorldPos);
-        float NL = dot(N, uSun);
         float ocean = 0.0;
-        vec3 albedo = uType == 0 ? rocky(p, N, V, ocean) : gas(p);
+        float height = 0.0;
+        vec3 albedo = uType == 0 ? rocky(p, N, V, ocean, height) : gas(p);
+        if (uType == 0) {
+          // Bump mapping from the procedural height field (screen-space derivatives).
+          float hb = max(height, uSea);
+          vec3 dpdx = dFdx(vWorldPos), dpdy = dFdy(vWorldPos);
+          float dhdx = dFdx(hb), dhdy = dFdy(hb);
+          vec3 R1 = cross(dpdy, N), R2 = cross(N, dpdx);
+          float det = dot(dpdx, R1);
+          vec3 grad = sign(det) * (dhdx * R1 + dhdy * R2);
+          N = normalize(abs(det) * N - 0.06 * grad);
+        }
+        float NL = dot(N, uSun);
         float diff = max(NL, 0.0);
         // Soft terminator from atmospheric refraction/scattering.
         float term = smoothstep(-0.08, 0.15, NL);
         vec3 col = albedo * (diff * 0.9 + 0.1 * term) * 2.2;
         // Specular sun glint on oceans.
         vec3 H = normalize(uSun + V);
-        col += ocean * pow(max(dot(N, H), 0.0), 120.0) * 4.0 * term;
+        col += ocean * pow(max(dot(N, H), 0.0), 220.0) * 1.2 * term;
         // City lights on the night side.
         if (uType == 0) {
           float city = smoothstep(0.55, 0.85, snoise(p * 55.0 + uSeed)) * smoothstep(0.3, 0.6, fbm(p * 4.0 + uSeed, 3) + 0.5);
@@ -110,14 +126,15 @@ export function createPlanet(): SimObject {
         vec3 p = normalize(vObj);
         vec3 q = p * 2.5 + uSeed + vec3(0.0, 0.0, uTime * 0.01);
         vec3 w = vec3(fbm(q, 3), fbm(q + 3.3, 3), 0.0);
-        float n = fbm(q * 1.5 + w * 0.8, 6) * 0.5 + 0.5;
+        float n = fbm(q * 1.5 + w * 0.8, 8) * 0.5 + 0.5;
+        n += fbm(q * 18.0 + w, 3) * 0.06 * (1.0 - smoothstep(0.02, 0.1, length(fwidth(p)) * 18.0));
         // Fewer clouds in the subtropical high-pressure belts.
         float lat = abs(p.y);
         float belt = 1.0 - 0.5 * exp(-pow((lat - 0.45) * 6.0, 2.0));
         float a = smoothstep(1.0 - uCloud * 0.75, 1.0 - uCloud * 0.75 + 0.25, n * belt);
         float NL = dot(normalize(vWorldN), uSun);
         float lit = smoothstep(-0.1, 0.25, NL) * (0.15 + 0.85 * max(NL, 0.0));
-        gl_FragColor = vec4(vec3(1.3) * lit, a * 0.95);
+        gl_FragColor = vec4(vec3(1.05) * lit, a * 0.95);
       }
     `,
   });
@@ -198,8 +215,8 @@ export function createPlanet(): SimObject {
   const tilt = new THREE.Group();
   tilt.rotation.z = THREE.MathUtils.degToRad(23.4);
   group.add(tilt);
-  const body = new THREE.Mesh(new THREE.SphereGeometry(1, 160, 120), surface);
-  const cloudMesh = new THREE.Mesh(new THREE.SphereGeometry(1.008, 128, 96), clouds);
+  const body = new THREE.Mesh(new THREE.SphereGeometry(1, 256, 192), surface);
+  const cloudMesh = new THREE.Mesh(new THREE.SphereGeometry(1.008, 256, 192), clouds);
   const atmoMesh = new THREE.Mesh(new THREE.SphereGeometry(1.1, 96, 72), atmosphere);
   const ringMesh = new THREE.Mesh(new THREE.RingGeometry(1.3, 2.4, 256, 1), rings);
   ringMesh.rotation.x = -Math.PI / 2;
