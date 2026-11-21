@@ -61,6 +61,31 @@ float fbm(vec3 p, int octaves){
 }
 `;
 
+// 3D cellular (Worley) noise: returns (F1, F2, cell id) — distances to the nearest feature points and a random id of the nearest cell.
+// Feature points drift with time so cells slowly evolve, like real convection cells.
+export const WORLEY = /* glsl */ `
+vec3 whash(vec3 p){
+  p = vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)), dot(p, vec3(113.5, 271.9, 124.6)));
+  return fract(sin(p) * 43758.5453123);
+}
+vec3 worley(vec3 p, float t){
+  vec3 i = floor(p);
+  vec3 f = p - i;
+  float d1 = 8.0, d2 = 8.0, id = 0.0;
+  for (int x = -1; x <= 1; x++)
+  for (int y = -1; y <= 1; y++)
+  for (int z = -1; z <= 1; z++) {
+    vec3 g = vec3(float(x), float(y), float(z));
+    vec3 o = whash(i + g);
+    o = 0.5 + 0.42 * sin(t + 6.2831853 * o);
+    vec3 r = g + o - f;
+    float d = dot(r, r);
+    if (d < d1) { d2 = d1; d1 = d; id = whash(i + g + 0.5).y; } else if (d < d2) { d2 = d; }
+  }
+  return vec3(sqrt(vec2(d1, d2)), id);
+}
+`;
+
 // Blackbody temperature (K) -> linear RGB, normalised so the brightest channel is 1.
 // Fit by Tanner Helland to CIE 1964 10° colour matching data; good to ~1% visually
 // in 1000–40000 K. Output is converted from sRGB to linear for HDR rendering.
