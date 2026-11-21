@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Sky } from '../sky';
 import type { SimObject } from '../types';
-import { TOUR_STOPS, displayedRotation, type Companion, distanceAt, travelSeconds, type StopKind, type TourStop } from './stops';
+import { TOUR_STOPS, displayedRotation, type Companion, distanceAt, LEG_SECONDS, type StopKind, type TourStop } from './stops';
 import {
   centripetal, clamp01, drift, frameOf, isSolar, layoutRoute, restEye, smoothstep,
   type KindFrame, type Placement,
@@ -10,6 +10,9 @@ import {
 import { createDust } from './dust';
 import { createBeacons } from './beacons';
 import { createOrbitLines } from './orbits';
+
+/** Closest approach of a fly-by, as a fraction of the resting distance. */
+const FLYBY = 0.9;
 
 export interface TourEvents {
   /** The camera settled at a stop. */
@@ -91,6 +94,8 @@ export class Tour {
   private e1 = new THREE.Vector3();
   private e2 = new THREE.Vector3();
   private e3 = new THREE.Vector3();
+  private fa = new THREE.Vector3();
+  private lookQ = new THREE.Quaternion();
   private lookM = new THREE.Matrix4();
   private nearest = -1;
   private resting = true;
@@ -281,11 +286,57 @@ export class Tour {
   /** Index of the stop nearest along the route. */
   get current() { return Math.round(this.progress); }
 
-  /** Where the rail passes stop k: in the direction of its resting view, further out. */
+  /** Where the fly-by passes stop k: in the direction of its resting view, a little closer. */
   private railAt(k: number, out: THREE.Vector3) {
     const pl = this.placements[k];
     restEye(pl, this.frames[k], this.aspect, out);
-    return out.sub(pl.center).multiplyScalar(2.2).add(pl.center);
+    return out.sub(pl.center).multiplyScalar(FLYBY).add(pl.center);
+  }
+
+  /** Point u (0–1, along the curve) of leg j of the rail. */
+  private railPoint(j: number, u: number, out: THREE.Vector3) {
+    const e0 = j > 0 ? this.railAt(j - 1, this.e0) : this.e0.copy(this.placements[j].center);
+    const e1 = this.railAt(j, this.e1), e2 = this.railAt(j + 1, this.e2);
+    const e3 = j + 2 <= this.last ? this.railAt(j + 2, this.e3) : this.e3.copy(this.placements[j + 1].center);
+    return centripetal(e0, e1, e2, e3, u, out);
+  }
+
+  /** Speed of the rail along leg j, per unit of u, at its start (end = false) or end. */
+  private railRate(j: number, end: boolean) {
+    const u0 = end ? 1 - 1e-3 : 0, u1 = end ? 1 : 1e-3;
+    const a = this.railPoint(j, u0, this.fa).clone();
+    return a.distanceTo(this.railPoint(j, u1, this.fa)) / 1e-3;
+  }
+
+  /**
+   * Speed of the fly-by past stop k, in world units per second: slow enough for the
+   * object to drift across the view (about 20°/s), never faster than an even pace
+   * along either neighbouring leg.
+   */
+  private passSpeed(k: number) {
+    const d = this.railAt(k, this.fa).distanceTo(this.placements[k].center);
+    let v = 0.35 * d;
+    if (k > 0) v = Math.min(v, this.railRate(k - 1, true) / LEG_SECONDS);
+    if (k < this.last) v = Math.min(v, this.railRate(k, false) / LEG_SECONDS);
+    return v;
+  }
+
+  /**
+   * Time to distance along leg j: every leg lasts the same, so a long leg cannot be
+   * flown at an even pace. Instead the camera passes each object slowly (the speed
+   * passSpeed gives, matched on both sides of it), speeds up in between and slows
+   * down again for the next one: u'(t) runs from a to b with a smooth bump on top.
+   */
+  private warp(j: number, t: number) {
+    const a = Math.min(1, (this.passSpeed(j) * LEG_SECONDS) / this.railRate(j, false));
+    const b = Math.min(1, (this.passSpeed(j + 1) * LEG_SECONDS) / this.railRate(j, true));
+    const m = Math.max(0, 1 - (a + b) / 2);
+    const S = t * t * t - (t * t * t * t) / 2; // ∫ smoothstep
+    // ∫ of the unit bump 140·t³(1−t)³: flat at both ends, so the camera eases away from an
+    // object it has just passed instead of shooting off while still close to it.
+    const t4 = t * t * t * t;
+    const B = t4 * (35 + t * (-84 + t * (70 - 20 * t)));
+    return a * (t - S) + b * S + m * B;
   }
 
   /** Resting eye of stop k (or the orbited view the camera left it from). */
@@ -333,16 +384,11 @@ export class Tour {
       };
     }
     // The camera has inertia: it speeds up and slows down smoothly towards the speed that
-    // would bring it to the target, never faster than the leg's real-distance pace
-    // (far jumps, clicking a distant stop, are allowed to go proportionally faster).
-    const i = Math.min(this.last - 1, Math.floor(gap > 0 ? this.progress : this.progress - 1e-6));
-    const seconds = travelSeconds(this.stops[Math.max(0, i)], this.stops[Math.max(0, i) + 1]);
-    let vmax = (1 / seconds) * (this.autoplay ? 1 : Math.max(1, Math.abs(gap) / 2.5));
-    if (this.autoplay) {
-      // Cruising: slow down while passing each object so it can be seen, never stop.
-      const d = Math.abs(this.progress - Math.round(this.progress));
-      vmax *= 0.45 + 0.55 * smoothstep(clamp01(d / 0.3));
-    }
+    // would bring it to the target, never faster than one leg per LEG_SECONDS (far jumps,
+    // clicking a distant stop, are allowed to go proportionally faster).
+    const seconds = LEG_SECONDS;
+    // (Passing each object slowly is left to the rail's time warp, so cruising never stops.)
+    const vmax = (1 / seconds) * (this.autoplay ? 1 : Math.max(1, Math.abs(gap) / 2.5));
     let want = THREE.MathUtils.clamp(gap * 1.8, -vmax, vmax);
     // A minimum pace near the end, so arriving does not crawl forever.
     if (Math.abs(want) < 0.05) want = Math.sign(gap) * 0.05;
@@ -375,10 +421,7 @@ export class Tour {
       // camera sweeps past objects instead of diving at each one. Only the stop it is leaving
       // and the stop it has been sent to (a stop, not a point between two) pull the path
       // in to their resting view, smoothly, over the last or first part of the leg.
-      const e0 = i > 0 ? this.railAt(i - 1, this.e0) : this.e0.copy(A.center);
-      const e1 = this.railAt(i, this.e1), e2 = this.railAt(i + 1, this.e2);
-      const e3 = i + 2 <= this.last ? this.railAt(i + 2, this.e3) : this.e3.copy(B.center);
-      centripetal(e0, e1, e2, e3, t, cam.position);
+      this.railPoint(i, this.warp(i, t), cam.position);
       if (this.anchor) {
         const w = 1 - smoothstep(clamp01(Math.abs(p - this.anchor.index) / 0.7));
         if (w > 0) cam.position.lerp(this.eyeAt(this.anchor.index, this.e0), w);
@@ -400,11 +443,15 @@ export class Tour {
       // Look at the object until it is passed, then turn smoothly to the next one ahead
       // (the camera is off to the side of the route, so the point looked at never comes near it).
       const ahead = this.target >= p;
-      const look = ahead ? smoothstep(clamp01(t / 0.35)) : 1 - smoothstep(clamp01((1 - t) / 0.35));
+      // The turn is a blend of the two view directions (not of the two points, whose
+      // in-between point would swing round fast while the camera is close to the object),
+      // spread over half the leg's time.
+      const look = ahead ? smoothstep(clamp01(t / 0.5)) : 1 - smoothstep(clamp01((1 - t) / 0.5));
       const targetA = anchorA ? A.center.clone().add(anchorA.target) : A.center;
       const targetB = anchorB ? B.center.clone().add(anchorB.target) : B.center;
-      const target = this.tmp2.lerpVectors(targetA, targetB, look);
-      this.wantQuat.setFromRotationMatrix(this.lookM.lookAt(cam.position, target, this.tmp.set(0, 1, 0)));
+      this.wantQuat.setFromRotationMatrix(this.lookM.lookAt(cam.position, targetA, this.tmp.set(0, 1, 0)));
+      this.lookQ.setFromRotationMatrix(this.lookM.lookAt(cam.position, targetB, this.tmp.set(0, 1, 0)));
+      this.wantQuat.slerp(this.lookQ, look);
       // The camera turns with a little lag and a capped rate, never with a jerk.
       const gapAngle = cam.quaternion.angleTo(this.wantQuat);
       if (gapAngle > 1e-6) {
@@ -418,7 +465,7 @@ export class Tour {
       if (legKey !== this.leg) {
         this.leg = legKey;
         const from = forwardLeg ? i : i + 1, to = forwardLeg ? i + 1 : i;
-        this.events.depart(from, to, travelSeconds(this.stops[i], this.stops[i + 1]));
+        this.events.depart(from, to, LEG_SECONDS);
       }
       this.events.progress(distanceAt(this.stops[i], this.stops[i + 1], t), t, i, i + 1);
       const a = this.object(i).bloom, b = this.object(i + 1).bloom;
