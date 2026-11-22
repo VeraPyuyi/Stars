@@ -105,9 +105,13 @@ export function createStar(): SimObject {
         // poles and a cooler, dimmer equator. Amplitude tied to the oblateness.
         float delta = (uOblate - 1.0);
         float gd = 1.0 + delta * (p.y * p.y - 1.0 / 3.0);
-        float T = uTemp * gd * (0.88 + 0.12 * pow(mu, 0.5)) * (1.0 - 0.3 * spot);
+        float T = uTemp * gd * (0.8 + 0.2 * pow(mu, 0.5)) * (1.0 - 0.3 * spot);
         float I = (limb * gran * (1.0 - spot) + fac) * pow(gd, 4.0);
-        float bright = 0.82 * pow(uTemp / 5772.0, -0.25);
+        // Sun-like stars (whose colour is nearly neutral) are exposed brighter, so the centre
+        // of the disk is close to white as the real Sun's is, rather than a dull beige, while
+        // limb darkening leaves a warm, golden rim. Redder and bluer stars keep their colour.
+        float sunlike = smoothstep(4300.0, 5500.0, uTemp) * (1.0 - smoothstep(6500.0, 8500.0, uTemp));
+        float bright = 0.82 * pow(uTemp / 5772.0, -0.25) * (1.0 + 0.75 * sunlike);
         gl_FragColor = vec4(blackbody(T) * I * bright, cover);
       }
     `,

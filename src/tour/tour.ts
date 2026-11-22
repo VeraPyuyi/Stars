@@ -4,15 +4,13 @@ import type { Sky } from '../sky';
 import type { SimObject } from '../types';
 import { TOUR_STOPS, displayedRotation, type Companion, distanceAt, LEG_SECONDS, type StopKind, type TourStop } from './stops';
 import {
-  centripetal, clamp01, drift, frameOf, isSolar, layoutRoute, restEye, smoothstep,
+  centripetal, clamp01, drift, FLYBY, frameOf, isSolar, layoutRoute, restEye, smoothstep,
   type KindFrame, type Placement,
 } from './route';
 import { createDust } from './dust';
 import { createBeacons } from './beacons';
 import { createOrbitLines } from './orbits';
 
-/** Closest approach of a fly-by, as a fraction of the resting distance. */
-const FLYBY = 0.9;
 
 export interface TourEvents {
   /** The camera settled at a stop. */
@@ -156,7 +154,7 @@ export class Tour {
       if (v.z > -1e-3) return; // behind the camera
       const ring = stop.preset.values.type === 'saturn' || stop.preset.values.type === 'gas';
       const R = stop.kind === 'planet' ? stop.scale * (ring ? 2.4 : 1.1)
-        : stop.kind === 'star' ? 1.2 : stop.kind === 'pulsar' ? 4 : 8;
+        : stop.kind === 'star' ? 1.2 * stop.scale : stop.kind === 'pulsar' ? 4 : 8;
       const p = this.tmp2.copy(c).project(this.camera);
       const sx = (p.x + 1) / 2 * w, sy = (1 - p.y) / 2 * h;
       const reach = Math.max((R / -v.z) * focal, 28);

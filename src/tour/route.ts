@@ -2,6 +2,16 @@ import * as THREE from 'three';
 import { orbitRadius } from '../objects/asteroidBelt';
 import type { StopKind, TourStop } from './stops';
 
+/** Closest approach of a fly-by, as a fraction of the resting distance. */
+export const FLYBY = 0.9;
+
+/**
+ * Every star is flown past at the same distance from its centre, the Earth–Sun distance of
+ * the tour's solar system, so their sizes compare directly with the Sun's (or, for stars
+ * too big for that, at 2.2 of their own radii).
+ */
+export const STAR_PASS = orbitRadius(1);
+
 /**
  * Where each stop hangs in space and where the camera rests to look at it.
  * Positions are not to scale: the gap between two stops grows with the log of the
@@ -30,6 +40,10 @@ export function frameOf(stop: TourStop): KindFrame {
   const f = KIND_FRAME[stop.kind], s = stop.scale;
   // Ringed planets are framed further out, so the whole ring fits.
   const ring = stop.preset.values.type === 'saturn' || stop.preset.values.type === 'gas' ? 1.8 : 1;
+  if (stop.kind === 'star') {
+    const rest = Math.max(STAR_PASS, 2.2 * s) / FLYBY;
+    return { extent: 7 + 2.5 * s, rest, min: f.min * s, max: Math.max(rest * 2, f.max * s) };
+  }
   return { extent: f.extent * s * ring, rest: f.rest * s * ring, min: f.min * s, max: f.max * s * ring };
 }
 
@@ -66,7 +80,7 @@ export function layoutRoute(stops: TourStop[]): Placement[] {
     } else if (s.id !== 'sun') {
       const p: TourStop = prev ?? s;
       const first = !prev || isSolar(p);
-      const gap = (first ? 110 : 40 + KIND_FRAME[p.kind].extent) + KIND_FRAME[s.kind].extent
+      const gap = (first ? 110 : 40 + frameOf(p).extent) + frameOf(s).extent
         + 30 * Math.log10(1 + Math.abs(s.ly - (first ? 0 : p.ly)));
       const n = i * 1.7;
       const dir = OUT.clone().addScaledVector(side0, 0.12 * Math.sin(n)).addScaledVector(UP, 0.08 * Math.sin(n * 0.6 + 1)).normalize();

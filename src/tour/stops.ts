@@ -13,6 +13,8 @@ export interface TourStop {
   ly: number;
   /** World-space radius of the object (planets are drawn smaller than the Sun). */
   scale: number;
+  /** Stars: real radius in solar radii (the drawn radius is this, up to STAR_CAP). */
+  radius?: number;
   /** Solar-system bodies orbit the Sun: semi-major axis (AU), period (years). */
   orbit?: { au: number; years: number };
   /** Sidereal rotation period in hours (negative: retrograde), if known. */
@@ -73,10 +75,10 @@ const BELT: Preset = {
 };
 
 /** Distances are rounded literature values; several (Deneb, the pulsars) are uncertain by tens of percent. */
-type Raw = [StopKind, Preset, number, Partial<Pick<TourStop, 'scale' | 'orbit' | 'rotHours' | 'companions'>>?];
+type Raw = [StopKind, Preset, number, Partial<Pick<TourStop, 'scale' | 'radius' | 'orbit' | 'rotHours' | 'companions'>>?];
 const RAW: Raw[] = [
   // The solar system, from the Sun outwards (distance = from the Sun).
-  ['star', find(STAR_PRESETS, 'sun'), 0, { rotHours: 609 }],
+  ['star', find(STAR_PRESETS, 'sun'), 0, { radius: 1, rotHours: 609 }],
   ['planet', MERCURY, 0.387 * AU_LY, { scale: 0.16, orbit: { au: 0.387, years: 0.241 }, rotHours: 1408 }],
   ['planet', VENUS, 0.723 * AU_LY, { scale: 0.25, orbit: { au: 0.723, years: 0.615 }, rotHours: -5832 }],
   ['planet', EARTH, 1 * AU_LY, { scale: 0.26, orbit: { au: 1, years: 1 }, rotHours: 23.9 }],
@@ -88,24 +90,25 @@ const RAW: Raw[] = [
   ['planet', NEPTUNE, 30.1 * AU_LY, { scale: 0.48, orbit: { au: 30.1, years: 164.8 }, rotHours: 16.1 }],
   // Beyond: stars, pulsars and black holes by distance from Earth.
   ['star', find(STAR_PRESETS, 'proxima'), 4.24, {
+    radius: 0.154,
     rotHours: 83 * 24,
     // Proxima b (11.2 d) and d (5.1 d): probably rocky; periods keep their real ratio.
     companions: [
-      { name: '比邻星 b', r: 3.1, scale: 0.11, seconds: 26, values: { type: 'mars', seed: 41 } },
-      { name: '比邻星 d', r: 2.1, scale: 0.07, seconds: 26 * (5.12 / 11.19), values: { type: 'mercury', seed: 7 } },
+      { name: '比邻星 b', r: 3.1, scale: 0.035, seconds: 26, values: { type: 'mars', seed: 41 } },
+      { name: '比邻星 d', r: 2.1, scale: 0.025, seconds: 26 * (5.12 / 11.19), values: { type: 'mercury', seed: 7 } },
     ],
   }],
-  ['star', find(STAR_PRESETS, 'sirius'), 8.6, { rotHours: 130 }],
-  ['star', find(STAR_PRESETS, 'altair'), 16.7, { rotHours: 9 }],
-  ['star', find(STAR_PRESETS, 'vega'), 25, { rotHours: 12.5 }],
-  ['star', find(STAR_PRESETS, 'regulus'), 79, { rotHours: 15.9 }],
-  ['star', find(STAR_PRESETS, 'betelgeuse'), 548, { rotHours: 36 * 8766 }],
-  ['star', find(STAR_PRESETS, 'antares'), 554, { rotHours: 12 * 8766 }],
-  ['star', find(STAR_PRESETS, 'rigel'), 860, { rotHours: 160 * 24 }],
+  ['star', find(STAR_PRESETS, 'sirius'), 8.6, { radius: 1.71, rotHours: 130 }],
+  ['star', find(STAR_PRESETS, 'altair'), 16.7, { radius: 1.8, rotHours: 9 }],
+  ['star', find(STAR_PRESETS, 'vega'), 25, { radius: 2.6, rotHours: 12.5 }],
+  ['star', find(STAR_PRESETS, 'regulus'), 79, { radius: 3.8, rotHours: 15.9 }],
+  ['star', find(STAR_PRESETS, 'betelgeuse'), 548, { radius: 760, rotHours: 36 * 8766 }],
+  ['star', find(STAR_PRESETS, 'antares'), 554, { radius: 680, rotHours: 12 * 8766 }],
+  ['star', find(STAR_PRESETS, 'rigel'), 860, { radius: 79, rotHours: 160 * 24 }],
   ['pulsar', find(PULSAR_PRESETS, 'vela'), 960],
   ['pulsar', find(PULSAR_PRESETS, 'b1919'), 1000],
   ['pulsar', find(PULSAR_PRESETS, 'b0943'), 2500],
-  ['star', find(STAR_PRESETS, 'deneb'), 2600, { rotHours: 500 * 24 }],
+  ['star', find(STAR_PRESETS, 'deneb'), 2600, { radius: 200, rotHours: 500 * 24 }],
   ['pulsar', find(PULSAR_PRESETS, 'crab'), 6500],
   ['blackhole', find(BLACK_HOLE_PRESETS, 'cygx1'), 7200],
   ['pulsar', find(PULSAR_PRESETS, 'j1748'), 18000],
@@ -122,9 +125,17 @@ const SHORT: Record<string, string> = {
   sgra: '人马座 A*', m87: 'M87*',
 };
 
+/**
+ * Stars are drawn at their real size relative to the Sun (radius 1). The supergiants are
+ * far bigger than the fly-by distance (Betelgeuse would swallow the orbit of Mars), so they
+ * are drawn at STAR_CAP and passed at a proportionally larger distance: on screen they
+ * look as a supergiant would from 2.2 of its own radii, filling the view.
+ */
+export const STAR_CAP = 12;
+
 export const TOUR_STOPS: TourStop[] = RAW.map(([kind, preset, ly, extra]) => ({
   id: preset.id, short: SHORT[preset.id] ?? preset.name, kind, preset, ly, scale: 1, ...extra,
-}));
+})).map((s) => (s.radius ? { ...s, scale: Math.min(s.radius, STAR_CAP) } : s));
 
 /** Inside the solar system distances are given from the Sun in AU, outside from Earth in light years. */
 export function formatDistance(ly: number): string {
