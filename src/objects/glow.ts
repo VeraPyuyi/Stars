@@ -39,7 +39,11 @@ export class Glow {
           float inner = 0.42 * exp(-(r - 1.0) * 5.0);
           float outer = 0.35 / (r * r) * (1.0 + uStreaks * 0.8 * streak) * smoothstep(1.0, 1.6, r);
           float fade = 1.0 - smoothstep(uSize * 0.6, uSize, r);
-          vec3 c = blackbody(uTemp) * (inner + outer) * fade * uIntensity;
+          // The halo is drawn a little more saturated than the disk: faint light of a nearly
+          // neutral colour (the Sun's) otherwise reads as a grey-brown haze, not a warm glow.
+          vec3 bb = blackbody(uTemp);
+          float lum = dot(bb, vec3(0.2126, 0.7152, 0.0722));
+          vec3 c = max(mix(vec3(lum), bb, 2.0), 0.0) * (inner + outer) * fade * uIntensity;
           gl_FragColor = vec4(c, 1.0);
         }
       `,
